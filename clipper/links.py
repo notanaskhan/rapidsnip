@@ -42,6 +42,7 @@ AUDIO_FORMAT = "ba[ext=m4a]/ba/audio_only/b[height<=480]/b"
 YDL_BASE = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True,
             "compat_opts": {"prefer-legacy-http-handler"}}
 LOUD_RATE = 2000            # Hz for the loudness pass (plenty for an RMS envelope)
+QUIET_DB = 35               # 20*log10(rms) of int16 audio below this is silence/muted
 MERGE_SECONDS = 25          # candidates closer than this are the same moment
 MAX_CANDIDATES = 25
 URL_RE = re.compile(r"^https?://\S+$")
@@ -62,6 +63,9 @@ class RenderItem(BaseModel):
 
 class RenderIn(BaseModel):
     items: list[RenderItem] = Field(min_length=1, max_length=30)
+    # "full": whole frame over a blurred copy (fits any video). "streamer": the streamer's saved
+    # facecam/gameplay boxes, which only fit streams with the same overlay as when calibrated.
+    layout: str = Field(default="full", pattern="^(full|streamer)$")
 
 
 # ---- signals ------------------------------------------------------------
@@ -226,7 +230,9 @@ def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
         if len(ctx) < 30:
             continue
         med = float(np.median(ctx))
-        mad = float(np.median(np.abs(ctx - med))) or 1.0
+        if med < QUIET_DB or float(np.percentile(ctx, 10)) < QUIET_DB:
+            continue          # muted stretch (Twitch mutes copyrighted music in VODs) or dead air
+        mad = max(float(np.median(np.abs(ctx - med))), 1.0)
         z = (smooth[i] - med) / mad
         if z >= 6 and smooth[i] == smooth[max(0, i - 8):i + 8].max():
             out.append({"moment": float(i), "score": min(1.0, z / 15), "source": "loud",
@@ -240,9 +246,10 @@ def merge_candidates(cands: list[dict], duration: float, clip_cfg: ClipConfig) -
     for c in cands:
         hit = next((m for m in merged if abs(m["moment"] - c["moment"]) <= MERGE_SECONDS), None)
         if hit:
-            hit["sources"].append(c["source"])
-            hit["details"].append(c["detail"])
-            hit["score"] = min(1.0, hit["score"] + 0.15)
+            if c["source"] not in hit["sources"]:       # a second, different signal agrees
+                hit["sources"].append(c["source"])
+                hit["details"].append(c["detail"])
+                hit["score"] = min(1.0, hit["score"] + 0.15)
             for k in ("top_messages", "reaction_counts", "ratio"):
                 if k in c and k not in hit:
                     hit[k] = c[k]
@@ -413,7 +420,7 @@ class LinkManager:
 
     # ---- rendering ------------------------------------------------------
 
-    async def render(self, jid: int, items: list[RenderItem]) -> int:
+    async def render(self, jid: int, items: list[RenderItem], layout: str = "full") -> int:
         job = self.db.job(jid)
         if not job:
             raise HTTPException(404, "no such link")
@@ -456,7 +463,7 @@ class LinkManager:
                             "reaction_counts": cand.get("reaction_counts", {})},
                 "label": it.label or ", ".join(cand.get("details", [])),
                 "folder": str(folder),
-                "layout": self.sup.layout_for(ch),
+                "layout": self.sup.layout_for(ch if layout == "streamer" else None),
             }
             self.sup.submit(payload, score=-1.0, on_done=lambda msg, jid=jid: self._render_done(jid, msg))
         return len(items)
@@ -501,7 +508,7 @@ class LinkManager:
 
         @app.post("/api/links/{jid}/render")
         async def render_link(jid: int, body: RenderIn):
-            n = await self.render(jid, body.items)
+            n = await self.render(jid, body.items, body.layout)
             return {"queued": n}
 
         @app.post("/api/links/{jid}/retry")

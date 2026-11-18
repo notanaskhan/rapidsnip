@@ -56,3 +56,10 @@ def test_merge_combines_nearby_signals():
     assert m[0]["sources"] == ["chat", "loud"] and m[0]["score"] == 0.75
     assert (m[0]["start"], m[0]["end"]) == (80, 110)
     assert m[1]["start"] == 480 and m[1]["end"] == 510
+
+
+def test_merge_same_signal_does_not_double_count():
+    c = [{"moment": 100, "score": 0.5, "source": "loud", "detail": "loud +14 dB"},
+         {"moment": 110, "score": 0.5, "source": "loud", "detail": "loud +12 dB"}]
+    m = merge_candidates(c, 1000, ClipConfig())
+    assert len(m) == 1 and m[0]["score"] == 0.5 and m[0]["sources"] == ["loud"]

@@ -193,8 +193,9 @@ export const api = {
   link: (id: number) => call<LinkJob>(`/api/links/${id}`),
   addLink: (url: string, streamer_id: number | null, permission: string) =>
     call<LinkJob>("/api/links", json("POST", { url, streamer_id, permission })),
-  renderLink: (id: number, items: { start: number; end: number; label?: string; candidate?: number }[]) =>
-    call<{ queued: number }>(`/api/links/${id}/render`, json("POST", { items })),
+  renderLink: (id: number, items: { start: number; end: number; label?: string; candidate?: number }[],
+               layout: "full" | "streamer" = "full") =>
+    call<{ queued: number }>(`/api/links/${id}/render`, json("POST", { items, layout })),
   retryLink: (id: number) => call<LinkJob>(`/api/links/${id}/retry`, json("POST")),
   deleteLink: (id: number) => call<void>(`/api/links/${id}`, json("DELETE")),
 };

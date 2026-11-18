@@ -74,7 +74,10 @@ function CandidateRow({ c, i, job, on, onToggle, onEdit }: {
   );
 }
 
-function JobDetail({ job, onChanged, flash }: { job: LinkJob; onChanged: () => void; flash: (t: string, k?: "ok" | "err") => void }) {
+function JobDetail({ job, onChanged, flash, hasFacecam }: {
+  job: LinkJob; onChanged: () => void; flash: (t: string, k?: "ok" | "err") => void; hasFacecam: boolean;
+}) {
+  const [layout, setLayout] = useState<"full" | "streamer">("full");
   // Preselect the strongest moments. JobDetail is keyed by job + candidate count, so this reruns per analysis.
   const [picked, setPicked] = useState<Set<number>>(() => new Set(
     job.candidates.map((c, i) => [c.score, i] as const).filter(([sc]) => sc >= 0.5).map(([, i]) => i).slice(0, 5)));
@@ -91,7 +94,7 @@ function JobDetail({ job, onChanged, flash }: { job: LinkJob; onChanged: () => v
   const render = async (items: { start: number; end: number; label?: string; candidate?: number }[]) => {
     setBusy(true);
     try {
-      const r = await api.renderLink(job.id, items);
+      const r = await api.renderLink(job.id, items, layout);
       flash(`Rendering ${r.queued} clip${r.queued === 1 ? "" : "s"}. Live clips still go first.`);
       onChanged();
     } catch (e) {
@@ -158,6 +161,13 @@ function JobDetail({ job, onChanged, flash }: { job: LinkJob; onChanged: () => v
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set(cands.map((_, i) => i)))}>Pick all</button>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setPicked(new Set())}>Clear</button>
             <span className="grow" />
+            <label className="row small" style={{ gap: 6 }}>
+              <span className="muted">Vertical layout</span>
+              <select value={layout} onChange={(e) => setLayout(e.target.value as "full" | "streamer")} style={{ width: "auto" }}>
+                <option value="full">Full frame</option>
+                <option value="streamer" disabled={!hasFacecam}>Streamer&apos;s facecam layout{hasFacecam ? "" : " (none saved)"}</option>
+              </select>
+            </label>
             <button type="button" className="btn btn-primary" disabled={busy || analyzing || !picked.size}
                     onClick={() => render([...picked].sort((a, b) => a - b).map((i) => ({ start: cands[i].start, end: cands[i].end, candidate: i })))}>
               Render {picked.size} clip{picked.size === 1 ? "" : "s"}
@@ -277,7 +287,8 @@ export default function LinksClipper() {
           {jobs && !jobs.length && <div className="empty">Paste a link above to get started.</div>}
         </div>
         <div className="card">
-          {current ? <JobDetail key={`${current.id}-${current.candidates.length}`} job={current} onChanged={reload} flash={flash} />
+          {current ? <JobDetail key={`${current.id}-${current.candidates.length}`} job={current}
+                                hasFacecam={!!streamers?.find((s) => s.id === current.streamer_id)?.facecam} onChanged={reload} flash={flash} />
             : <div className="muted" style={{ padding: 20 }}>Pick a link.</div>}
         </div>
       </div>
