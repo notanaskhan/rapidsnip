@@ -15,7 +15,7 @@ detector:
   min_unique_chatters: 8
   cooldown_seconds: 60
   pause_after_event_seconds: 90   # after raids, hype trains, sub bombs
-  extra_bots: []              # extra bot logins to ignore (lowercase)
+  extra_bots: [schnozebot]    # extra bot logins to ignore (lowercase)
   reactions: [LUL, LULW, OMEGALUL, KEKW, LMAO, LMFAO, "💀", "😂", WTF, NO WAY, HOLY, CLIP, CLIP IT, Pog, PogChamp, monkaS, W, L]
 
 clip:
