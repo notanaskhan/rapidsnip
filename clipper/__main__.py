@@ -14,7 +14,6 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from .config import load_config
-from .supervisor import Supervisor
 
 
 def main() -> None:
@@ -59,6 +58,10 @@ def main() -> None:
 
 
 def _cli(cfg, console, log) -> None:
+    # Imported here, not at the top: spawned helper processes re-import this module, and the
+    # link analyzer's process must never load Streamlink (see clipper/links.py).
+    from .supervisor import Supervisor
+
     for ch in cfg.channels:
         if not ch.allowed:
             log.warning("skipping %s: no permission note in config.yaml", ch.name)

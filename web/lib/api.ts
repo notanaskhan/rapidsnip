@@ -116,6 +116,7 @@ export interface LinkJob {
     has_heatmap?: boolean;
     signals?: Record<string, number>;
     chat_messages?: number;
+    chat_source?: string;
   };
   candidates: Candidate[];
   clip_ids: number[];

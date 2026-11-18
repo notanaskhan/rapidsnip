@@ -107,14 +107,15 @@ def chat_candidates(url: str, duration: float, det_cfg: DetectorConfig, clip_cfg
                     progress=None) -> tuple[list[dict], int]:
     """Chat replay through the live detector. Returns (candidates, messages seen)."""
     from chat_downloader import ChatDownloader
-    from chat_downloader.errors import ChatDownloaderError
 
     det = Detector("vod", dataclasses.replace(det_cfg, warmup_minutes=min(det_cfg.warmup_minutes, 1.0)),
                    clip_cfg, started_at=0.0)
     triggers = {}
     n = 0
     try:
-        chat = ChatDownloader().get_chat(url, message_types=["text_message"], inactivity_timeout=60)
+        # interruptible_retry=False: its retry prompt reads the keyboard, which crashes off a terminal.
+        chat = ChatDownloader().get_chat(url, message_types=["text_message"], inactivity_timeout=60,
+                                         max_attempts=3, interruptible_retry=False)
         for m in chat:
             t = m.get("time_in_seconds")
             if t is None or t < 0:
@@ -127,9 +128,14 @@ def chat_candidates(url: str, duration: float, det_cfg: DetectorConfig, clip_cfg
             n += 1
             if progress and n % 2000 == 0 and duration:
                 progress(min(0.99, t / duration), f"reading chat replay: {n:,} messages")
-    except ChatDownloaderError as e:
-        log.info("no chat replay for %s: %s", url, e)
-        return [], 0
+    except Exception as e:  # noqa: BLE001 - ChatDownloaderError or anything else: chat is one signal of three
+        log.info("no chat replay for %s: %r", url, e)
+        if n == 0:
+            return [], 0
+    return _final_candidates(det, triggers, duration), n
+
+
+def _final_candidates(det: Detector, triggers: dict, duration: float) -> list[dict]:
     for tr in det.tick(duration + 60) + det.flush():
         triggers[tr.id] = tr
     out = []
@@ -140,7 +146,50 @@ def chat_candidates(url: str, duration: float, det_cfg: DetectorConfig, clip_cfg
                     "score": min(1.0, (tr.ratio - 1) / 4), "source": "chat", "ratio": round(tr.ratio, 2),
                     "detail": f"chat {tr.ratio:.1f}x", "top_messages": tr.top_messages[:8],
                     "reaction_counts": tr.reaction_counts})
-    return out, n
+    return out
+
+
+def logged_chat_candidates(chat_dir: str, login: str, start_ts: float, duration: float,
+                           det_cfg: DetectorConfig, clip_cfg: ClipConfig, progress=None) -> tuple[list[dict], int, float]:
+    """Chat the live app saved while the stream was on (data/chat/<login>/<date>.jsonl), lined up
+    with the VOD by its start time. Returns (candidates, messages, share of the VOD covered)."""
+    import json
+    from datetime import timedelta
+
+    root = Path(chat_dir) / login
+    end_ts = start_ts + duration
+    day = datetime.fromtimestamp(start_ts).date()
+    files = []
+    while datetime.combine(day, datetime.min.time()).timestamp() <= end_ts:
+        f = root / f"{day:%Y-%m-%d}.jsonl"
+        if f.exists():
+            files.append(f)
+        day += timedelta(days=1)
+    det = Detector(login, dataclasses.replace(det_cfg, warmup_minutes=min(det_cfg.warmup_minutes, 1.0)),
+                   clip_cfg, started_at=0.0)
+    triggers, n, first, last = {}, 0, None, None
+    for f in files:
+        for line in f.open(encoding="utf-8"):
+            row = json.loads(line)
+            ts = row.get("ts", 0)
+            if not start_ts <= ts <= end_ts:
+                continue
+            t = ts - start_ts
+            if row.get("type") == "event":
+                from .chat import ChatEvent
+                det.feed(ChatEvent(login, row.get("kind", ""), t, row.get("login", ""), row.get("params") or {}))
+            else:
+                det.feed(ChatMessage(login, row.get("user_id", ""), row.get("login", ""), row.get("text", ""), t))
+            for tr in det.tick(t):
+                triggers[tr.id] = tr
+            first = t if first is None else first
+            last = t
+            n += 1
+            if progress and n % 5000 == 0:
+                progress(min(0.99, t / duration), f"reading saved chat: {n:,} messages")
+    if not n:
+        return [], 0, 0.0
+    return _final_candidates(det, triggers, duration), n, (last - first) / duration if duration else 0.0
 
 
 def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
@@ -210,6 +259,18 @@ def merge_candidates(cands: list[dict], duration: float, clip_cfg: ClipConfig) -
     return sorted(merged, key=lambda m: m["moment"])
 
 
+# ---- isolation ----------------------------------------------------------
+# Streamlink (loaded by the live recorder in the API process) swaps part of urllib3 for a
+# version that breaks `requests` users such as chat-downloader. Link analysis therefore runs
+# in its own process, which never imports Streamlink. Progress comes back through a queue.
+
+def _in_child(fn_name: str, args: tuple, q) -> object:
+    fn = globals()[fn_name]
+    if fn_name in ("chat_candidates", "loud_candidates", "logged_chat_candidates"):
+        return fn(*args, progress=lambda p, m: q.put((p, m)))
+    return fn(*args)
+
+
 # ---- manager ------------------------------------------------------------
 
 class LinkManager:
@@ -220,6 +281,8 @@ class LinkManager:
         self.queue: asyncio.Queue[int] = asyncio.Queue()
         self.task: asyncio.Task | None = None
         self.renders: dict[int, dict] = {}     # job id -> {"total", "done", "failed"}
+        self.pool = None
+        self.mgr = None
 
     def attach(self, sup, app: FastAPI) -> None:
         self.sup = sup
@@ -232,11 +295,37 @@ class LinkManager:
                 self.queue.put_nowait(j["id"])
             elif j["status"] == "rendering":
                 self.db.update_job(j["id"], status="ready", message="render interrupted by a restart")
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor
+        ctx = mp.get_context("spawn")
+        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=ctx)
+        self.mgr = ctx.Manager()
         self.task = asyncio.create_task(self._loop(), name="links")
 
     async def stop(self) -> None:
         if self.task:
             self.task.cancel()
+        if self.pool:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+        if self.mgr:
+            self.mgr.shutdown()
+
+    async def _run(self, fn_name: str, *args, on_progress=None):
+        """Run a module function in the isolated analysis process, relaying progress."""
+        loop = asyncio.get_running_loop()
+        q = self.mgr.Queue()
+        fut = loop.run_in_executor(self.pool, _in_child, fn_name, args, q)
+        while True:
+            done, _ = await asyncio.wait({fut}, timeout=1.0)
+            while True:
+                try:
+                    p, m = q.get_nowait()
+                except Exception:  # noqa: BLE001 - queue.Empty from the manager proxy
+                    break
+                if on_progress:
+                    on_progress(p, m)
+            if done:
+                return fut.result()
 
     # ---- analysis -------------------------------------------------------
 
@@ -268,13 +357,11 @@ class LinkManager:
         job = self.db.job(jid)
         if not job:
             return
-        loop = asyncio.get_running_loop()
-
         def progress(p: float, msg: str) -> None:
-            loop.call_soon_threadsafe(lambda: self.db.update_job(jid, progress=round(p, 3), message=msg))
+            self.db.update_job(jid, progress=round(p, 3), message=msg)
 
         self.db.update_job(jid, status="analyzing", progress=0, message="reading video info")
-        info = await asyncio.to_thread(ytdlp_info, job["url"])
+        info = await self._run("ytdlp_info", job["url"])
         duration = float(info.get("duration") or 0)
         thumb = info.get("thumbnail") or ""
         meta = {"uploader": info.get("uploader") or info.get("channel") or "", "extractor": info.get("extractor_key"),
@@ -289,15 +376,31 @@ class LinkManager:
         cands = heatmap_candidates(info)
         signals = {"replayed": len(cands)}
         chat_n = 0
-        if meta["was_live"] or "twitch" in (meta["extractor"] or "").lower():
+        # Chat: first the chat this app saved live (Twitch VODs of streams it watched), then
+        # the platform's own chat replay (YouTube past streams).
+        login = self._streamer_login(job)
+        start_ts = info.get("timestamp") or info.get("release_timestamp")
+        chat, chat_src = [], ""
+        if login and start_ts and duration:
+            progress(0.0, "checking saved chat")
+            chat, chat_n, covered = await self._run("logged_chat_candidates", str(self.cfg.data_dir / "chat"),
+                                                    login, float(start_ts), duration, det_cfg, clip_cfg,
+                                                    on_progress=progress)
+            if chat_n:
+                chat_src = f"saved chat ({covered:.0%} of the video)"
+        if not chat_n and meta["was_live"]:
             progress(0.0, "reading chat replay")
-            chat, chat_n = await asyncio.to_thread(chat_candidates, meta["webpage_url"], duration,
-                                                   det_cfg, clip_cfg, progress)
+            chat, chat_n = await self._run("chat_candidates", meta["webpage_url"], duration,
+                                           det_cfg, clip_cfg, on_progress=progress)
+            if chat_n:
+                chat_src = "chat replay"
+        if chat_n:
             cands += chat
             signals["chat"] = len(chat)
+            meta["chat_source"] = chat_src
         progress(0.0, "measuring loudness")
         try:
-            loud = await asyncio.to_thread(loud_candidates, info, duration, progress)
+            loud = await self._run("loud_candidates", info, duration, on_progress=progress)
         except Exception as e:  # noqa: BLE001 - loudness is a bonus signal
             log.warning("loudness pass failed for job %d: %r", jid, e)
             loud = []
@@ -316,7 +419,7 @@ class LinkManager:
             raise HTTPException(404, "no such link")
         if job["status"] in ("queued", "analyzing"):
             raise HTTPException(409, "still analyzing")
-        info = await asyncio.to_thread(ytdlp_info, job["url"])       # fresh URLs: they expire
+        info = await self._run("ytdlp_info", job["url"])       # fresh URLs: they expire
         inputs, vmap, amap = media_inputs(info)
         ch = self._channel_for(job)
         streamer = self.db.streamer(job["streamer_id"]) if job.get("streamer_id") else None
