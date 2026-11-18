@@ -1,0 +1,47 @@
+output_dir: ./clips
+data_dir: ./data
+poll_live_seconds: 60
+buffer_minutes: 10            # how much recent video to keep on disk per channel
+quality: "1080p60,720p60,best"
+min_free_gb: 20               # refuse to start below this
+
+detector:
+  window_seconds: 10
+  step_seconds: 2             # sliding window recalculated every 2 s
+  baseline_minutes: 5
+  warmup_minutes: 3           # no triggers right after going live
+  ratio_threshold: 3.0        # score must be >= 3x baseline
+  z_threshold: 4.0            # and >= baseline + 4 x MAD
+  min_unique_chatters: 8
+  cooldown_seconds: 60
+  pause_after_event_seconds: 90   # after raids, hype trains, sub bombs
+  extra_bots: []              # extra bot logins to ignore (lowercase)
+  reactions: [LUL, LULW, OMEGALUL, KEKW, LMAO, LMFAO, "💀", "😂", WTF, NO WAY, HOLY, CLIP, CLIP IT, Pog, PogChamp, monkaS, W, L]
+
+clip:
+  pre_seconds: 20             # before the estimated moment
+  post_seconds: 10            # after the estimated moment
+  chat_delay_seconds: 6       # how far chat lags the video, tuned per channel
+  max_length_seconds: 45
+  merge_gap_seconds: 15       # spikes this close become one clip
+
+captions:
+  enabled: true
+  model: mlx-community/whisper-large-v3-turbo
+  words_per_caption: 3
+
+layout:
+  enabled: true
+  output: [1080, 1920]
+
+# Every channel needs a non-empty `permission` note or it is never recorded.
+channels:
+  - name: examplestreamer       # Twitch login name
+    permission: ""              # e.g. "yes, Discord DM 2026-11-18"
+    credit_url: https://twitch.tv/examplestreamer
+    # optional per-channel overrides:
+    # ratio_threshold: 3.0
+    # chat_delay_seconds: 6
+    layout:
+      facecam: null             # [x, y, w, h] in source pixels; null = no facecam
+      gameplay: null            # [x, y, w, h]; null = full frame
