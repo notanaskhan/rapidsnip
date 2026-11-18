@@ -9,7 +9,7 @@ def run_polls(states, monkeypatch):
     seq = iter(states)
     current = {}
 
-    def fake_is_live(ch):
+    def fake_is_live(ch, url=None):
         return current[ch]
 
     monkeypatch.setattr(lw, "is_live", fake_is_live)

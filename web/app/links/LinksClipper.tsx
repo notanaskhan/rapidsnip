@@ -137,9 +137,18 @@ function JobDetail({ job, onChanged, flash, hasFacecam }: {
         <div className="row small">
           <span className="faint">Found:</span>
           {"chat" in job.info.signals && <span className="chip" style={{ color: "var(--chat)" }}>{job.info.signals.chat} chat spikes{job.info.chat_messages ? ` from ${job.info.chat_messages.toLocaleString()} messages` : ""}{job.info.chat_source ? ` · ${job.info.chat_source}` : ""}</span>}
-          {!("chat" in job.info.signals) && <span className="chip" title="Chat is used when this app recorded the stream live, or the platform offers chat replay">no chat available</span>}
+          {job.info.chat_pending ? (
+            <span className="chip chip-info" title="Long streams take a while; chat spikes are added when this finishes. You can render meanwhile.">
+              reading chat replay {Math.round((job.info.chat_progress ?? 0) * 100)}%
+            </span>
+          ) : !("chat" in job.info.signals) && (
+            <span className="chip" title="Chat is used when this app recorded the stream live, or the platform offers chat replay">no chat available</span>
+          )}
           <span className="chip" style={{ color: "var(--replayed)" }}>{job.info.signals.replayed ?? 0} most-replayed peaks{job.info.has_heatmap ? "" : " (not available)"}</span>
-          <span className="chip" style={{ color: "var(--loud)" }}>{job.info.signals.loud ?? 0} loud moments</span>
+          <span className="chip" style={{ color: "var(--loud)" }}
+                title={job.info.loud_covered != null ? "The source was slow to read, so loudness stopped early. On YouTube, installing deno removes the throttling." : undefined}>
+            {job.info.signals.loud ?? 0} loud moments{job.info.loud_covered != null ? ` (first ${Math.round(job.info.loud_covered * 100)}% only)` : ""}
+          </span>
         </div>
       )}
 

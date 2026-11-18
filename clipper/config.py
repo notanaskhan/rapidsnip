@@ -56,7 +56,24 @@ class ChannelLayout:
 
 
 PLATFORMS = ("twitch", "youtube", "kick")
-LIVE_PLATFORMS = ("twitch",)        # platforms the live recorder supports today
+LIVE_PLATFORMS = ("twitch", "youtube")   # platforms the live recorder supports today
+
+
+def live_url(platform: str, login: str) -> str:
+    """The URL Streamlink records (and checks for liveness) for a channel."""
+    if platform == "youtube":
+        return f"https://www.youtube.com/@{login}/live"
+    if platform == "kick":
+        return f"https://kick.com/{login}"
+    return f"https://twitch.tv/{login}"
+
+
+def streamlink_args(platform: str) -> list[str]:
+    """Platform-specific Streamlink options for recording."""
+    if platform == "twitch":
+        # Twitch: lowest latency, and H.264 only so it never serves HEVC/AV1.
+        return ["--twitch-low-latency", "--twitch-supported-codecs", "h264"]
+    return []
 
 
 @dataclass

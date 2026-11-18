@@ -20,7 +20,8 @@ function ChannelCard({ c, now }: { c: ChannelStatus; now: number }) {
         </div>
         <div className="row">
           {c.warmup && <span className="chip chip-warn" title="The detector learns this chat's normal level for 3 minutes">warm-up</span>}
-          {c.paused && <span className="chip chip-info" title="Paused after a raid or gift-sub flood">paused</span>}
+          {c.paused && <span className="chip chip-info" title="Paused after a raid, gift flood or chat outage">paused</span>}
+          {c.chat_connected === false && <span className="chip chip-warn" title="Chat reader is reconnecting; spikes can't be detected meanwhile">chat down</span>}
           <span className="chip chip-live">LIVE</span>
         </div>
       </header>

@@ -137,10 +137,11 @@ def _frame_from_file(path: Path, at: float) -> bytes | None:
     return _ffmpeg_frame(["-i", str(path), "-ss", f"{at:.2f}"])
 
 
-def _frame_from_twitch(login: str) -> bytes | None:
+def _frame_from_stream(platform: str, login: str) -> bytes | None:
+    from .config import live_url, streamlink_args
     from .recorder import _tool
-    sl = subprocess.Popen([_tool("streamlink"), "--loglevel", "error", "--twitch-supported-codecs", "h264",
-                           "--stdout", f"https://twitch.tv/{login}", "1080p60,1080p,720p60,best"],
+    sl = subprocess.Popen([_tool("streamlink"), "--loglevel", "error", *streamlink_args(platform),
+                           "--stdout", live_url(platform, login), "1080p60,1080p,720p60,best"],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         return _ffmpeg_frame(["-i", "pipe:0", "-ss", "1"], stdin=sl.stdout, timeout=45)
@@ -264,11 +265,11 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
                 if jpg:
                     return _jpeg(jpg, "live recording")
             tried.append("not being recorded right now")
-        if source in ("auto", "stream") and row["platform"] == "twitch":
-            jpg = await asyncio.to_thread(_frame_from_twitch, login)
+        if source in ("auto", "stream") and row["platform"] in LIVE_PLATFORMS:
+            jpg = await asyncio.to_thread(_frame_from_stream, row["platform"], login)
             if jpg:
                 return _jpeg(jpg, "live stream")
-            tried.append("not live on Twitch")
+            tried.append(f"not live on {row['platform'].title()}")
         if source in ("auto", "clip"):
             for c in db.clips(channel=login, limit=20):
                 folder = clips_dir / c["folder"]

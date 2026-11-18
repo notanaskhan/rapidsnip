@@ -23,6 +23,7 @@ export interface ChannelStatus {
   dropped?: number;
   last_trigger?: { moment: number; ratio: number; final: boolean } | null;
   history?: [number, number, number][]; // [time, score, baseline]
+  chat_connected?: boolean;
 }
 
 export interface Status {
@@ -117,6 +118,10 @@ export interface LinkJob {
     signals?: Record<string, number>;
     chat_messages?: number;
     chat_source?: string;
+    chat_pending?: boolean;
+    loud_covered?: number;
+    chat_progress?: number;
+    chat_status?: string;
   };
   candidates: Candidate[];
   clip_ids: number[];

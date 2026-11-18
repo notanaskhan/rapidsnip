@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import live_url, streamlink_args
+
 log = logging.getLogger(__name__)
 
 SEGMENT_SECONDS = 2
@@ -80,8 +82,9 @@ class RecorderStats:
 
 class Recorder:
     def __init__(self, channel: str, data_dir: Path, quality: str = "best",
-                 buffer_minutes: float = 10):
+                 buffer_minutes: float = 10, platform: str = "twitch"):
         self.channel = channel
+        self.platform = platform
         self.root = Path(data_dir) / channel
         self.quality = quality
         self.buffer_seconds = buffer_minutes * 60
@@ -181,13 +184,13 @@ class Recorder:
         self.stats.sessions.append(session)
         index = folder / "index.csv"
 
-        url = f"https://twitch.tv/{self.channel}"
+        url = live_url(self.platform, self.channel)
         r, w = os.pipe()
         sl_log = open(folder / "streamlink.log", "ab")
         ff_log = open(folder / "ffmpeg.log", "ab")
         try:
             streamlink = await asyncio.create_subprocess_exec(
-                _tool("streamlink"), "--twitch-low-latency", "--twitch-supported-codecs", "h264",
+                _tool("streamlink"), *streamlink_args(self.platform),
                 "--loglevel", "warning", "--stdout", url, self.quality,
                 stdout=w, stderr=sl_log, start_new_session=True,
             )

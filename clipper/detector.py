@@ -104,8 +104,10 @@ class ReactionMatcher:
 
 
 class Detector:
-    def __init__(self, channel: str, det: DetectorConfig, clip: ClipConfig, started_at: float):
+    def __init__(self, channel: str, det: DetectorConfig, clip: ClipConfig, started_at: float,
+                 settle_seconds: float = SETTLE_SECONDS):
         self.channel = channel
+        self.settle = settle_seconds      # YouTube hands out chat in batches every few seconds
         self.det = det
         self.clip = clip
         self.started_at = started_at
@@ -183,7 +185,7 @@ class Detector:
     def tick(self, now: float) -> list[Trigger]:
         """Evaluate every window that has fully closed by `now`. Returns new/updated triggers."""
         out: list[Trigger] = []
-        last_closed = int((now - SETTLE_SECONDS) // self.step) - 1
+        last_closed = int((now - self.settle) // self.step) - 1
         while self.next_bin <= last_closed:
             self._evaluate(self.next_bin, out)
             self.next_bin += 1

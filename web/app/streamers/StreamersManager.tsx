@@ -9,7 +9,7 @@ import styles from "./streamers.module.css";
 
 const PLATFORMS: { key: Platform; live: boolean }[] = [
   { key: "twitch", live: true },
-  { key: "youtube", live: false },
+  { key: "youtube", live: true },
   { key: "kick", live: false },
 ];
 
@@ -76,7 +76,7 @@ function Form({ initial, onSubmit, onCancel, submitLabel, isNew }: {
         <label className="field">
           <span>Channel <span className="hint">name or URL</span></span>
           <input required value={d.login} onChange={(e) => set("login", e.target.value)}
-                 placeholder={d.platform === "youtube" ? "@handle or channel URL" : "e.g. kaicenat"} />
+                 placeholder={d.platform === "youtube" ? "@handle, e.g. CarryisLive" : "e.g. kaicenat"} />
         </label>
         <label className="field">
           <span>Display name</span>

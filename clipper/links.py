@@ -153,6 +153,67 @@ def _final_candidates(det: Detector, triggers: dict, duration: float) -> list[di
     return out
 
 
+def youtube_replay_candidates(url: str, duration: float, det_cfg: DetectorConfig, clip_cfg: ClipConfig,
+                              work_dir: str, progress=None) -> tuple[list[dict], int]:
+    """Chat replay of a finished YouTube stream, through yt-dlp's live_chat downloader (a separate
+    program), timed by each message's offset into the video."""
+    import json
+    import shutil
+
+    from .youtube_chat import parse_line
+
+    folder = Path(work_dir)
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    ytdlp = str(Path(__import__("sys").executable).parent / "yt-dlp")
+    proc = subprocess.Popen([ytdlp, "--skip-download", "--write-subs", "--sub-langs", "live_chat",
+                             "--compat-options", "prefer-legacy-http-handler", "--no-warnings", "--quiet",
+                             "-o", str(folder / "chat.%(ext)s"), url],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    det = Detector("vod", dataclasses.replace(det_cfg, warmup_minutes=min(det_cfg.warmup_minutes, 1.0)),
+                   clip_cfg, started_at=0.0)
+    triggers, n, pos, buf, path = {}, 0, 0, "", None
+
+    def drain() -> None:
+        nonlocal pos, buf, path, n
+        found = sorted(folder.glob("chat.live_chat.json*"))
+        if not found:
+            return
+        if path is not None and found[0] != path:
+            pos = 0
+        path = found[0]
+        with path.open(encoding="utf-8", errors="replace") as f:
+            f.seek(pos)
+            chunk = f.read()
+            pos = f.tell()
+        buf += chunk
+        *lines, buf = buf.split("\n")
+        for line in lines:
+            try:
+                off = int(json.loads(line).get("replayChatItemAction", {}).get("videoOffsetTimeMsec", -1)) / 1000
+            except (ValueError, AttributeError):
+                continue
+            if off < 0:
+                continue
+            for item in parse_line(line, "vod", 0):
+                item.ts = off
+                det.feed(item)
+                n += isinstance(item, ChatMessage)
+            for tr in det.tick(off):
+                triggers[tr.id] = tr
+            if progress and n and n % 2000 == 0 and duration:
+                progress(min(0.99, off / duration), f"reading chat replay: {n:,} messages")
+
+    while proc.poll() is None:
+        time.sleep(1)
+        drain()
+    drain()
+    shutil.rmtree(folder, ignore_errors=True)
+    if not n:
+        return [], 0
+    return _final_candidates(det, triggers, duration), n
+
+
 def logged_chat_candidates(chat_dir: str, login: str, start_ts: float, duration: float,
                            det_cfg: DetectorConfig, clip_cfg: ClipConfig, progress=None) -> tuple[list[dict], int, float]:
     """Chat the live app saved while the stream was on (data/chat/<login>/<date>.jsonl), lined up
@@ -196,8 +257,12 @@ def logged_chat_candidates(chat_dir: str, login: str, start_ts: float, duration:
     return _final_candidates(det, triggers, duration), n, (last - first) / duration if duration else 0.0
 
 
-def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
-    """Loudest stretches relative to their surroundings, from an audio-only read."""
+LOUD_BUDGET = 150           # seconds: stop reading audio after this (YouTube can throttle to ~1x)
+
+
+def loud_candidates(info: dict, duration: float, progress=None) -> tuple[list[dict], float]:
+    """Loudest stretches relative to their surroundings, from an audio-only read.
+    Returns (candidates, share of the video covered within the time budget)."""
     import numpy as np
     import yt_dlp
 
@@ -211,7 +276,11 @@ def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     rms = []
     chunk = LOUD_RATE * 2
+    t0 = time.time()
     while True:
+        if time.time() - t0 > LOUD_BUDGET:
+            proc.kill()
+            break
         buf = proc.stdout.read(chunk)
         if not buf:
             break
@@ -220,8 +289,9 @@ def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
         if progress and len(rms) % 120 == 0 and duration:
             progress(min(0.99, len(rms) / duration), "measuring loudness")
     proc.wait()
+    covered = min(1.0, len(rms) / duration) if duration else 1.0
     if len(rms) < 120:
-        return []
+        return [], covered
     db = 20 * np.log10(np.maximum(np.array(rms), 1.0))
     smooth = np.convolve(db, np.ones(3) / 3, mode="same")          # 3 s loudness
     out = []
@@ -237,7 +307,7 @@ def loud_candidates(info: dict, duration: float, progress=None) -> list[dict]:
         if z >= 6 and smooth[i] == smooth[max(0, i - 8):i + 8].max():
             out.append({"moment": float(i), "score": min(1.0, z / 15), "source": "loud",
                         "detail": f"loud +{smooth[i] - med:.0f} dB"})
-    return out
+    return out, covered
 
 
 def merge_candidates(cands: list[dict], duration: float, clip_cfg: ClipConfig) -> list[dict]:
@@ -273,7 +343,7 @@ def merge_candidates(cands: list[dict], duration: float, clip_cfg: ClipConfig) -
 
 def _in_child(fn_name: str, args: tuple, q) -> object:
     fn = globals()[fn_name]
-    if fn_name in ("chat_candidates", "loud_candidates", "logged_chat_candidates"):
+    if fn_name in ("chat_candidates", "loud_candidates", "logged_chat_candidates", "youtube_replay_candidates"):
         return fn(*args, progress=lambda p, m: q.put((p, m)))
     return fn(*args)
 
@@ -290,6 +360,7 @@ class LinkManager:
         self.renders: dict[int, dict] = {}     # job id -> {"total", "done", "failed"}
         self.pool = None
         self.mgr = None
+        self.chat_tasks: dict[int, asyncio.Task] = {}
 
     def attach(self, sup, app: FastAPI) -> None:
         self.sup = sup
@@ -302,16 +373,21 @@ class LinkManager:
                 self.queue.put_nowait(j["id"])
             elif j["status"] == "rendering":
                 self.db.update_job(j["id"], status="ready", message="render interrupted by a restart")
+            if j["status"] in ("ready", "rendering", "done") and j["info"].get("chat_pending"):
+                self._spawn_chat_phase(j["id"])                 # chat replay was cut off by a restart
         import multiprocessing as mp
         from concurrent.futures import ProcessPoolExecutor
         ctx = mp.get_context("spawn")
-        self.pool = ProcessPoolExecutor(max_workers=1, mp_context=ctx)
+        # One worker for the analysis queue, one for slow background chat replays.
+        self.pool = ProcessPoolExecutor(max_workers=2, mp_context=ctx)
         self.mgr = ctx.Manager()
         self.task = asyncio.create_task(self._loop(), name="links")
 
     async def stop(self) -> None:
         if self.task:
             self.task.cancel()
+        for t in list(self.chat_tasks.values()):
+            t.cancel()
         if self.pool:
             self.pool.shutdown(wait=False, cancel_futures=True)
         if self.mgr:
@@ -380,43 +456,95 @@ class LinkManager:
         det_cfg = ch.detector if ch else self.cfg.detector
         clip_cfg = ch.clip if ch else self.cfg.clip
 
+        # Quick signals first, so the link is ready to use within a minute or so:
+        # "most replayed", chat this app saved live (Twitch VODs of streams it watched), loudness.
         cands = heatmap_candidates(info)
         signals = {"replayed": len(cands)}
         chat_n = 0
-        # Chat: first the chat this app saved live (Twitch VODs of streams it watched), then
-        # the platform's own chat replay (YouTube past streams).
         login = self._streamer_login(job)
         start_ts = info.get("timestamp") or info.get("release_timestamp")
-        chat, chat_src = [], ""
         if login and start_ts and duration:
             progress(0.0, "checking saved chat")
             chat, chat_n, covered = await self._run("logged_chat_candidates", str(self.cfg.data_dir / "chat"),
                                                     login, float(start_ts), duration, det_cfg, clip_cfg,
                                                     on_progress=progress)
             if chat_n:
-                chat_src = f"saved chat ({covered:.0%} of the video)"
-        if not chat_n and meta["was_live"]:
-            progress(0.0, "reading chat replay")
-            chat, chat_n = await self._run("chat_candidates", meta["webpage_url"], duration,
-                                           det_cfg, clip_cfg, on_progress=progress)
-            if chat_n:
-                chat_src = "chat replay"
-        if chat_n:
-            cands += chat
-            signals["chat"] = len(chat)
-            meta["chat_source"] = chat_src
+                cands += chat
+                signals["chat"] = len(chat)
+                meta["chat_source"] = f"saved chat ({covered:.0%} of the video)"
         progress(0.0, "measuring loudness")
         try:
-            loud = await self._run("loud_candidates", info, duration, on_progress=progress)
+            loud, covered = await self._run("loud_candidates", info, duration, on_progress=progress)
+            if covered < 0.98:
+                meta["loud_covered"] = round(covered, 3)
         except Exception as e:  # noqa: BLE001 - loudness is a bonus signal
             log.warning("loudness pass failed for job %d: %r", jid, e)
             loud = []
         cands += loud
         signals["loud"] = len(loud)
+        # The platform's chat replay can take a long time on long streams (YouTube hands it out in
+        # small pages), so it runs in the background and adds its moments when it finishes.
+        slow_chat = not chat_n and meta["was_live"]
+        meta.update({"signals": signals, "chat_messages": chat_n, "chat_pending": slow_chat,
+                     "base_candidates": cands})
         merged = merge_candidates(cands, duration, clip_cfg)
-        meta.update({"signals": signals, "chat_messages": chat_n})
         self.db.update_job(jid, status="ready", progress=1, candidates=merged, info=meta,
-                           message=f"{len(merged)} candidate moments")
+                           message=f"{len(merged)} candidate moments" + (" · reading chat replay…" if slow_chat else ""))
+        if slow_chat:
+            self._spawn_chat_phase(jid)
+
+    def _spawn_chat_phase(self, jid: int) -> None:
+        t = asyncio.create_task(self._chat_phase(jid), name=f"link-chat-{jid}")
+        self.chat_tasks[jid] = t
+        t.add_done_callback(lambda _t, jid=jid: self.chat_tasks.pop(jid, None))
+
+    async def _chat_phase(self, jid: int) -> None:
+        job = self.db.job(jid)
+        if not job:
+            return
+        meta = job["info"]
+        ch = self._channel_for(job)
+        det_cfg = ch.detector if ch else self.cfg.detector
+        clip_cfg = ch.clip if ch else self.cfg.clip
+
+        def progress(p: float, msg: str) -> None:
+            cur = self.db.job(jid)
+            if cur:
+                cur["info"]["chat_progress"] = round(p, 3)
+                cur["info"]["chat_status"] = msg
+                self.db.update_job(jid, info=cur["info"])
+
+        chat, n, src = [], 0, ""
+        try:
+            if "youtube" in (meta.get("extractor") or "").lower():
+                chat, n = await self._run("youtube_replay_candidates", meta["webpage_url"], job["duration"],
+                                          det_cfg, clip_cfg, str(self.cfg.data_dir / "links" / str(jid)),
+                                          on_progress=progress)
+                src = "YouTube chat replay"
+            if not n:
+                chat, n = await self._run("chat_candidates", meta["webpage_url"], job["duration"],
+                                          det_cfg, clip_cfg, on_progress=progress)
+                src = "chat replay"
+        except Exception as e:  # noqa: BLE001 - chat is one signal of three
+            log.warning("chat replay failed for link %d: %r", jid, e)
+        cur = self.db.job(jid)
+        if not cur:
+            return
+        info = cur["info"]
+        info["chat_pending"] = False
+        info.pop("chat_status", None)
+        info.pop("chat_progress", None)
+        if n:
+            base = info.get("base_candidates", []) + chat
+            info["signals"]["chat"] = len(chat)
+            info["chat_messages"] = n
+            info["chat_source"] = src
+            merged = merge_candidates(base, cur["duration"], clip_cfg)
+            msg = f"{len(merged)} candidate moments (chat replay added {len(chat)})"
+            self.db.update_job(jid, candidates=merged, info=info,
+                               message=msg if cur["status"] == "ready" else cur["message"])
+        else:
+            self.db.update_job(jid, info=info)
 
     # ---- rendering ------------------------------------------------------
 
@@ -527,6 +655,7 @@ class LinkManager:
     def _job_out(self, job: dict) -> dict:
         clips = self.db.clips(source="link", limit=500)
         job = dict(job)
+        job["info"] = {k: v for k, v in job["info"].items() if k != "base_candidates"}
         job["clip_ids"] = [c["id"] for c in clips if c.get("link_job_id") == job["id"]]
         job["queue_position"] = None
         return job

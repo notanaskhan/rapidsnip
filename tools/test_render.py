@@ -89,7 +89,7 @@ def main() -> None:
                 s_, e_ = ln.split(",")[1:3]
                 to_s = lambda t: sum(float(x) * m for x, m in zip(t.split(":"), (3600, 60, 1)))  # noqa: E731
                 times.append((to_s(s_) + to_s(e_)) / 2)
-    times = (times or [5, 15, 25])[:3]
+    times = (times or [a.seconds * f for f in (0.2, 0.5, 0.8)])[:3]
     frames = []
     for i, t in enumerate(times):
         out = folder / f"check_{i}.jpg"

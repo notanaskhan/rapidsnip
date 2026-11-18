@@ -29,13 +29,16 @@ from rich.table import Table
 
 from .chat import ChatItem, TwitchChat
 from .clip_job import ClipJob
-from .config import ChannelConfig, Config
+from .config import ChannelConfig, Config, live_url
 from .detector import Detector, Trigger
 from .live_watch import LiveWatcher
 from .notify import notify
 from .output import clip_folder, write_index
 from .recorder import Recorder
 from .worker import WorkerHandle
+from .youtube_chat import YouTubeChat
+
+YOUTUBE_SETTLE = 8.0         # YouTube chat arrives in batches; wait before scoring a window
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,8 @@ class ChannelSession:
     dropped: int = 0
     history: deque = field(default_factory=lambda: deque(maxlen=HISTORY_POINTS))
     last_bin: int = 0
+    chat: YouTubeChat | None = None          # YouTube: this channel's own chat reader
+    chat_task: asyncio.Task | None = None
 
 
 @dataclass
@@ -83,6 +88,7 @@ class Supervisor:
         self.chat = TwitchChat(cfg.data_dir / "chat", on_item=self._on_chat)
         self.watcher = LiveWatcher(list(self.channels), cfg.poll_live_seconds,
                                    self._on_live, self._on_offline)
+        self.watcher.urls = {n: live_url(c.platform, n) for n, c in self.channels.items()}
         self.worker = WorkerHandle(dataclasses.asdict(cfg.captions))
         self.pending: list[Pending] = []
         self.busy: Pending | None = None
@@ -105,14 +111,15 @@ class Supervisor:
         ones stop recording, and edited ones pick up their new settings."""
         new = {c.name: c for c in channels if c.recordable}
         for name in list(self.channels):
-            if name not in new:
-                self.channels.pop(name)
-                await self.chat.part(name)
+            if name not in new or new[name].platform != self.channels[name].platform:
+                old = self.channels.pop(name)
+                if old.platform == "twitch":
+                    await self.chat.part(name)
                 if name in self.sessions:
                     await self._on_offline(name, reason="removed")
                 self.watcher.live.discard(name)
         for name, c in new.items():
-            if name not in self.channels:
+            if name not in self.channels and c.platform == "twitch":
                 await self.chat.join(name)
             self.channels[name] = c
             s = self.sessions.get(name)
@@ -120,6 +127,7 @@ class Supervisor:
                 s.cfg = c
                 s.detector.det, s.detector.clip = c.detector, c.clip
         self.watcher.channels = list(self.channels)
+        self.watcher.urls = {n: live_url(c.platform, n) for n, c in self.channels.items()}
         if self.started_at:
             asyncio.create_task(self.watcher.poll_once())    # notice new live channels right away
 
@@ -129,11 +137,18 @@ class Supervisor:
         if self._stopping or name in self.sessions or name not in self.channels:
             return
         cfg = self.channels[name]
-        rec = Recorder(name, self.cfg.data_dir, self.cfg.quality, self.cfg.buffer_minutes)
-        det = Detector(name, cfg.detector, cfg.clip, started_at=time.time())
+        rec = Recorder(name, self.cfg.data_dir, self.cfg.quality, self.cfg.buffer_minutes, cfg.platform)
+        det = Detector(name, cfg.detector, cfg.clip, started_at=time.time(),
+                       settle_seconds=YOUTUBE_SETTLE if cfg.platform == "youtube" else 1.0)
         s = ChannelSession(cfg, rec, det)
         s.rec_task = asyncio.create_task(rec.run(), name=f"rec-{name}")
         s.rec_task.add_done_callback(self._task_died)
+        if cfg.platform == "youtube":
+            from .recorder import _tool
+            s.chat = YouTubeChat(name, live_url("youtube", name), self.cfg.data_dir / "ytchat" / name,
+                                 self.cfg.data_dir / "chat", self._on_chat, _tool("yt-dlp"))
+            s.chat_task = asyncio.create_task(s.chat.run(), name=f"ytchat-{name}")
+            s.chat_task.add_done_callback(self._task_died)
         self.sessions[name] = s
         log.info("[%s] session started", name)
 
@@ -148,8 +163,21 @@ class Supervisor:
         await s.recorder.stop()
         if s.rec_task:
             s.rec_task.cancel()
+        self._stop_chat(s)
         self.sessions.pop(name, None)
         log.info("[%s] session stopped", name)
+
+    @staticmethod
+    def _stop_chat(s: ChannelSession) -> None:
+        if s.chat:
+            s.chat.stop()
+        if s.chat_task:
+            s.chat_task.cancel()
+
+    def _chat_state(self, s: ChannelSession) -> tuple[bool, float]:
+        if s.chat:
+            return s.chat.connected, s.chat.last_rx
+        return self.chat.connected.is_set(), self.chat.last_rx
 
     @staticmethod
     def _task_died(task: asyncio.Task) -> None:
@@ -298,7 +326,7 @@ class Supervisor:
         while True:
             now = time.time()
             for s in list(self.sessions.values()):
-                s.detector.chat_state(self.chat.connected.is_set(), self.chat.last_rx, now)
+                s.detector.chat_state(*self._chat_state(s), now)
                 self._handle_triggers(s, s.detector.tick(now))
                 if s.detector.next_bin != s.last_bin:
                     s.last_bin = s.detector.next_bin
@@ -335,6 +363,7 @@ class Supervisor:
                     "last_trigger": {"moment": lt.moment, "ratio": round(lt.ratio, 2), "final": lt.final}
                     if lt else None,
                     "history": list(s.history),
+                    "chat_connected": self._chat_state(s)[0],
                 })
             chans.append(row)
         busy = self.busy.payload if self.busy else None
@@ -377,8 +406,9 @@ class Supervisor:
         self.worker.start()
         self.tasks = [asyncio.create_task(self._results_loop(), name="results")]
         if live:
-            for name in self.channels:
-                await self.chat.join(name)
+            for name, c in self.channels.items():
+                if c.platform == "twitch":
+                    await self.chat.join(name)
             self.tasks += [
                 asyncio.create_task(self.chat.run(), name="chat"),
                 asyncio.create_task(self.watcher.run(), name="live-watch"),
@@ -431,6 +461,7 @@ class Supervisor:
             await s.recorder.stop()
             if s.rec_task:
                 s.rec_task.cancel()
+            self._stop_chat(s)
         deadline = time.time() + 120
         while self.busy and time.time() < deadline:
             await asyncio.sleep(0.5)

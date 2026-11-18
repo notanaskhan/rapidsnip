@@ -12,10 +12,10 @@ log = logging.getLogger(__name__)
 OFFLINE_POLLS = 2            # consecutive offline polls before stopping a session
 
 
-def is_live(channel: str) -> bool | None:
-    """True/False, or None if the check itself failed (network, Twitch error)."""
+def is_live(channel: str, url: str | None = None) -> bool | None:
+    """True/False, or None if the check itself failed (network, platform error)."""
     try:
-        return bool(streamlink.Streamlink().streams(f"https://twitch.tv/{channel}"))
+        return bool(streamlink.Streamlink().streams(url or f"https://twitch.tv/{channel}"))
     except streamlink.NoPluginError:
         raise
     except Exception as e:  # noqa: BLE001 - any failure means "unknown"
@@ -28,6 +28,7 @@ class LiveWatcher:
                  on_live: Callable[[str], Awaitable[None]],
                  on_offline: Callable[[str], Awaitable[None]]):
         self.channels = channels
+        self.urls: dict[str, str] = {}          # channel -> live URL (default: Twitch)
         self.poll_seconds = poll_seconds
         self.on_live = on_live
         self.on_offline = on_offline
@@ -35,7 +36,8 @@ class LiveWatcher:
         self._offline_count: dict[str, int] = {}
 
     async def poll_once(self) -> None:
-        results = await asyncio.gather(*(asyncio.to_thread(is_live, ch) for ch in self.channels))
+        results = await asyncio.gather(*(asyncio.to_thread(is_live, ch, self.urls.get(ch))
+                                         for ch in self.channels))
         for ch, state in zip(self.channels, results):
             if state is None:
                 continue

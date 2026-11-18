@@ -16,16 +16,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from clipper.config import live_url  # noqa: E402
 from clipper.live_watch import is_live  # noqa: E402
-from clipper.recorder import Recorder  # noqa: E402
+from clipper.recorder import Recorder, _tool  # noqa: E402
+from clipper.youtube_chat import YouTubeChat  # noqa: E402
 
 
 async def main(args) -> int:
-    if not await asyncio.to_thread(is_live, args.channel):
-        print(f"{args.channel} is not live")
+    if not await asyncio.to_thread(is_live, args.channel, live_url(args.platform, args.channel)):
+        print(f"{args.channel} is not live on {args.platform}")
         return 1
-    rec = Recorder(args.channel, Path(args.data_dir), args.quality, args.buffer_minutes)
+    rec = Recorder(args.channel, Path(args.data_dir), args.quality, args.buffer_minutes, args.platform)
     task = asyncio.create_task(rec.run())
+    chat = None
+    if args.platform == "youtube":
+        chat = YouTubeChat(args.channel, live_url("youtube", args.channel), Path(args.data_dir) / "ytchat" / args.channel,
+                           None, None, _tool("yt-dlp"))
+        chat_task = asyncio.create_task(chat.run())
     started = time.time()
     killed_at = None
     last_old_end = None
@@ -49,7 +56,8 @@ async def main(args) -> int:
         max_files = max(max_files, files)
         print(f"t={elapsed:5.0f}s  segments={len(rec.segments):4d}  files={files:4d}  "
               f"buffer={rec.buffered_seconds:6.1f}s  deleted={rec.stats.deleted:4d}  "
-              f"restarts={rec.stats.restarts}", flush=True)
+              f"restarts={rec.stats.restarts}" + (f"  chat={chat.messages} msgs, "
+              f"last {time.time() - chat.last_rx:.0f}s ago" if chat else ""), flush=True)
         if args.kill_at and killed_at is None and elapsed >= args.kill_at:
             last_old_end = rec.latest_wall_end
             killed_at = time.time()
@@ -58,6 +66,9 @@ async def main(args) -> int:
     watcher.cancel()
     await rec.stop()
     task.cancel()
+    if chat:
+        chat.stop()
+        chat_task.cancel()
     await asyncio.gather(task, return_exceptions=True)
 
     segs = rec.segments
@@ -101,6 +112,7 @@ if __name__ == "__main__":
     p.add_argument("--kill-at", type=float, default=120)
     p.add_argument("--quality", default="1080p60,720p60,best")
     p.add_argument("--data-dir", default="data")
+    p.add_argument("--platform", default="twitch", choices=["twitch", "youtube"])
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     sys.exit(asyncio.run(main(a)))
