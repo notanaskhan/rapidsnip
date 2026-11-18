@@ -31,6 +31,15 @@ def probe_duration(path: Path) -> float:
     return float(out)
 
 
+def probe_size(path: Path) -> tuple[int, int]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    w, h = out.split(",")[:2]
+    return int(w), int(h)
+
+
 def cut(segments: list[Segment], start: float, end: float, moment: float, out_dir: Path) -> CutResult:
     """Cut [start, end] (wall clock) from a contiguous run of segments into out_dir."""
     if not segments:

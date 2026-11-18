@@ -36,12 +36,21 @@ layout:
 
 # Every channel needs a non-empty `permission` note or it is never recorded.
 channels:
-  - name: examplestreamer       # Twitch login name
-    permission: ""              # e.g. "yes, Discord DM 2026-11-18"
-    credit_url: https://twitch.tv/examplestreamer
+  - name: ishowspeed            # Twitch login name
+    display_name: IShowSpeed
+    permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
+    credit_url: https://twitch.tv/ishowspeed
     # optional per-channel overrides:
     # ratio_threshold: 3.0
     # chat_delay_seconds: 6
     layout:
-      facecam: null             # [x, y, w, h] in source pixels; null = no facecam
+      facecam: null             # [x, y, w, h] in source pixels; null = no facecam (set with tools/calibrate.py)
       gameplay: null            # [x, y, w, h]; null = full frame
+
+  - name: carryminati           # streams on YouTube (CarryisLive); Twitch channel is not live. YouTube is phase 2.
+    display_name: CarryMinati
+    permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
+    credit_url: https://www.youtube.com/@CarryisLive
+    layout:
+      facecam: null
+      gameplay: null

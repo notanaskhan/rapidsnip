@@ -57,6 +57,7 @@ class ChannelLayout:
 @dataclass
 class ChannelConfig:
     name: str
+    display_name: str
     permission: str
     credit_url: str
     detector: DetectorConfig
@@ -114,7 +115,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 
     channels = []
     seen = set()
-    channel_keys = {"name", "permission", "credit_url", "layout"}
+    channel_keys = {"name", "display_name", "permission", "credit_url", "layout"}
     section_keys = {f.name for f in dataclasses.fields(DetectorConfig)} | {
         f.name for f in dataclasses.fields(ClipConfig)
     }
@@ -129,6 +130,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         lay = ch.get("layout") or {}
         channels.append(ChannelConfig(
             name=name,
+            display_name=str(ch.get("display_name") or name),
             permission=str(ch.get("permission") or ""),
             credit_url=ch.get("credit_url") or f"https://twitch.tv/{name}",
             detector=_overrides(DetectorConfig, detector, ch),

@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,15 @@ RESTART_DELAY = 2            # seconds before restarting a dead pipeline
 REANCHOR_SLIP = 5            # re-anchor if this many seconds behind for REANCHOR_COUNT segments
 REANCHOR_COUNT = 10
 POLL_INDEX = 0.25
+
+
+def _tool(name: str) -> str:
+    """Prefer the copy installed next to this Python (the uv venv), so PATH doesn't matter."""
+    local = Path(sys.executable).parent / name
+    found = local if local.exists() else shutil.which(name)
+    if not found:
+        raise FileNotFoundError(f"{name} not found (looked in {local.parent} and PATH)")
+    return str(found)
 
 
 @dataclass
@@ -145,7 +155,12 @@ class Recorder:
             quick_failures = 0
             while not self._stop:
                 started = time.time()
-                await self._session()
+                try:
+                    await self._session()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - log and restart, never die silently
+                    log.exception("[%s] recorder session crashed", self.channel)
                 if self._stop:
                     break
                 quick_failures = quick_failures + 1 if time.time() - started < 15 else 0
@@ -172,12 +187,12 @@ class Recorder:
         ff_log = open(folder / "ffmpeg.log", "ab")
         try:
             streamlink = await asyncio.create_subprocess_exec(
-                "streamlink", "--twitch-low-latency", "--twitch-supported-codecs", "h264",
+                _tool("streamlink"), "--twitch-low-latency", "--twitch-supported-codecs", "h264",
                 "--loglevel", "warning", "--stdout", url, self.quality,
                 stdout=w, stderr=sl_log,
             )
             ffmpeg = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin",
+                _tool("ffmpeg"), "-hide_banner", "-loglevel", "warning", "-nostdin",
                 "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
                 "-f", "segment", "-segment_time", str(SEGMENT_SECONDS), "-reset_timestamps", "1",
                 "-segment_format", "mpegts", "-segment_list", str(index),
