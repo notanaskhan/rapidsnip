@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, type Box, type Platform, type Streamer } from "@/lib/api";
 import { useFlash, usePoll } from "@/lib/hooks";
 import { PLATFORM_LABEL } from "@/lib/format";
+import LayoutEditor from "@/components/LayoutEditor";
 import styles from "./streamers.module.css";
 
 const PLATFORMS: { key: Platform; live: boolean }[] = [
@@ -118,7 +119,7 @@ function Form({ initial, onSubmit, onCancel, submitLabel, isNew }: {
           </label>
         </div>
         <p className="faint small" style={{ margin: 0 }}>
-          To read off the boxes, run <code>uv run python tools/calibrate.py {d.login || "<channel>"} --preview</code> while they&apos;re live.
+          Easier: save, then use the <strong>Layout</strong> button to draw the boxes on a frame from their stream.
         </p>
       </details>
 
@@ -151,6 +152,7 @@ export default function StreamersManager() {
   const { data, error, reload } = usePoll(api.streamers, 10000);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
+  const [layoutFor, setLayoutFor] = useState<Streamer | null>(null);
   const { msg, flash } = useFlash();
 
   return (
@@ -212,6 +214,8 @@ export default function StreamersManager() {
                       reload();
                     }} /> Enabled
                   </label>
+                  <button type="button" className="btn btn-sm" onClick={() => setLayoutFor(s)}
+                          title="Draw the facecam and gameplay boxes on a frame">Layout</button>
                   <button type="button" className="btn btn-sm" onClick={() => setEditing(s.id)}>Edit</button>
                   <button type="button" className="btn btn-sm btn-danger" onClick={async () => {
                     if (!confirm(`Remove ${s.display_name}? Their existing clips stay.`)) return;
@@ -226,6 +230,13 @@ export default function StreamersManager() {
         ))}
         {data && !data.length && <div className="empty">No streamers yet. Add someone who agreed to be clipped.</div>}
       </div>
+      {layoutFor && (
+        <LayoutEditor streamer={layoutFor} onClose={() => setLayoutFor(null)} onSaved={(s) => {
+          setLayoutFor(null);
+          flash(`Layout saved for ${s.display_name}. New clips use it.`);
+          reload();
+        }} />
+      )}
       {msg && <div className={`toast ${msg.kind}`} role="status">{msg.text}</div>}
     </>
   );

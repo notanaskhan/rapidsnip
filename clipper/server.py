@@ -11,6 +11,7 @@ Routes (all JSON unless noted):
   PATCH  /api/clips/{id}                  {status?, title?, description?}
   DELETE /api/clips/{id}?files=true       remove from the list (and delete files)
   GET    /api/clips/{id}/download/{kind}  vertical | horizontal | thumb (attachment)
+  GET    /api/streamers/{id}/frame        current 1920x1080 JPEG for drawing layout boxes
   GET    /api/settings                    global detector / clip / captions / layout settings
   GET    /media/<folder>/<file>           clip files (range requests, so video seeks)
   + link clipper routes from clipper.links
@@ -20,7 +21,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import asyncio
 import shutil
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -28,7 +31,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -117,6 +120,37 @@ def _validate_streamer(data: dict) -> dict:
         data["credit_url"] = {"twitch": f"https://twitch.tv/{login}", "youtube": f"https://www.youtube.com/@{login}",
                               "kick": f"https://kick.com/{login}"}[platform]
     return data
+
+
+def _ffmpeg_frame(args: list[str], stdin=None, timeout: float = 30) -> bytes | None:
+    # Output seeking: input seeking on a lone .ts segment returns no frame.
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", *args,
+           "-frames:v", "1", "-vf", "scale=1920:1080", "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "pipe:1"]
+    try:
+        out = subprocess.run(cmd, stdin=stdin, capture_output=True, timeout=timeout).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return out or None
+
+
+def _frame_from_file(path: Path, at: float) -> bytes | None:
+    return _ffmpeg_frame(["-i", str(path), "-ss", f"{at:.2f}"])
+
+
+def _frame_from_twitch(login: str) -> bytes | None:
+    from .recorder import _tool
+    sl = subprocess.Popen([_tool("streamlink"), "--loglevel", "error", "--twitch-supported-codecs", "h264",
+                           "--stdout", f"https://twitch.tv/{login}", "1080p60,1080p,720p60,best"],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        return _ffmpeg_frame(["-i", "pipe:0", "-ss", "1"], stdin=sl.stdout, timeout=45)
+    finally:
+        sl.kill()
+
+
+def _jpeg(data: bytes, source: str) -> Response:
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"X-Frame-Source": source, "Cache-Control": "no-store"})
 
 
 def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
@@ -212,6 +246,40 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
     async def delete_streamer(sid: int):
         db.delete_streamer(sid)
         await apply_streamers()
+
+    @app.get("/api/streamers/{sid}/frame")
+    async def streamer_frame(sid: int, source: str = "auto"):
+        """A frame to draw layout boxes on, always scaled to 1920x1080 (the units boxes use).
+        Tries the running recording, then the live stream itself, then their latest clip."""
+        row = db.streamer(sid)
+        if not row:
+            raise HTTPException(404, "no such streamer")
+        login = row["login"]
+        tried = []
+        if source in ("auto", "recording"):
+            s = sup.sessions.get(login)
+            segs = s.recorder.segments[-3:-1] if s else []
+            if segs:
+                jpg = await asyncio.to_thread(_frame_from_file, segs[-1].path, 0.5)
+                if jpg:
+                    return _jpeg(jpg, "live recording")
+            tried.append("not being recorded right now")
+        if source in ("auto", "stream") and row["platform"] == "twitch":
+            jpg = await asyncio.to_thread(_frame_from_twitch, login)
+            if jpg:
+                return _jpeg(jpg, "live stream")
+            tried.append("not live on Twitch")
+        if source in ("auto", "clip"):
+            for c in db.clips(channel=login, limit=20):
+                folder = clips_dir / c["folder"]
+                for name in ("horizontal_raw.mp4", "horizontal.mp4"):
+                    if (folder / name).exists():
+                        jpg = await asyncio.to_thread(_frame_from_file, folder / name, 2.0)
+                        if jpg:
+                            return _jpeg(jpg, f"clip from {time.strftime('%b %d %H:%M', time.localtime(c['moment']))}")
+            tried.append("no clips yet")
+        raise HTTPException(404, "No frame available: " + "; ".join(tried) +
+                            ". Open this again while they're live.")
 
     # ---- clips ------------------------------------------------------------
 
