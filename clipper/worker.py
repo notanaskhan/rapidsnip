@@ -19,7 +19,8 @@ log = logging.getLogger(__name__)
 
 def _process(job: dict, captions_cfg: dict) -> dict:
     from . import captions
-    from .cutter import cut, probe_size, run_ffmpeg
+    from .cutter import cut
+    from .layout import render
     from .output import write_meta
     from .recorder import Anchor, Segment
 
@@ -40,19 +41,11 @@ def _process(job: dict, captions_cfg: dict) -> dict:
         caps = captions.group(words, captions_cfg.get("words_per_caption", 3))
         timings["captions"] = round(time.time() - t1, 1)
 
-    # Horizontal 16:9 with the same captions, for compilations.
+    # One pass: vertical 9:16 (if enabled) + horizontal 16:9, both with the same captions.
     t2 = time.time()
-    horizontal = folder / "horizontal.mp4"
-    if caps:
-        w, h = probe_size(res.video)
-        ass = folder / "captions_h.ass"
-        ass.write_text(captions.build_ass(caps, w, h, font_size=round(h * 0.065),
-                                          margin_v=round(h * 0.08)))
-        run_ffmpeg(["-i", str(res.video), "-vf", captions.subtitles_filter(ass),
-                    "-c:v", "h264_videotoolbox", "-b:v", "8M", "-c:a", "copy",
-                    "-movflags", "+faststart", str(horizontal)])
-    else:
-        run_ffmpeg(["-i", str(res.video), "-c", "copy", "-movflags", "+faststart", str(horizontal)])
+    lay = job.get("layout", {})
+    render(res.video, folder, caps, lay.get("facecam"), lay.get("gameplay"),
+           output=tuple(lay.get("output", (1080, 1920))), vertical=lay.get("enabled", True))
     timings["render"] = round(time.time() - t2, 1)
     timings["total"] = round(time.time() - t0, 1)
 

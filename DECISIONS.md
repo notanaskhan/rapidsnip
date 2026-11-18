@@ -23,3 +23,8 @@ Choices made during the build that PLAN.md doesn't cover.
 - **2026-11-18 · A caption stays up until the next one starts** unless there is a pause over 0.6 s (then it holds 0.25 s past its last word). A pause over 0.6 s also starts a new caption even if it has fewer than `words_per_caption` words.
 - **2026-11-18 · Executables are resolved from the venv first** (`streamlink` next to `sys.executable`), so the app works whether started with `uv run` or `.venv/bin/python`.
 - **2026-11-18 · The worker leaves the terminal's process group and ignores SIGINT**, so Ctrl+C lets the current clip finish; it exits on its own if the supervisor dies.
+- **2026-11-18 · Vertical and horizontal render in one FFmpeg pass** (one decode, `split`, two VideoToolbox encodes: vertical 10 Mb/s, horizontal 8 Mb/s).
+- **2026-11-18 · Crop boxes are in 1920x1080 pixels** and scaled by `source_width / 1920` when the stream comes in at another resolution (e.g. the 720p fallback). `tools/calibrate.py` always grabs frames scaled to 1920x1080.
+- **2026-11-18 · Caption placement.** With a facecam: centred ~90 px below the band boundary (top of the gameplay band). Without: centred ~110 px below the video, in the blurred band, so captions never cover the game.
+- **2026-11-18 · IShowSpeed calibrated** from a live frame: facecam [0, 460, 388, 242], gameplay [400, 0, 1300, 1080] (drops the facecam column and his on-screen chat).
+- **2026-11-18 · Per-clip processing is ~32-35 s** (cut 9 + captions 4-7 + render 18) while recording runs alongside. Slightly over the 30 s target; the obvious saving is to skip the intermediate `horizontal_raw.mp4` encode and render both outputs straight from the segments. Left for M9.

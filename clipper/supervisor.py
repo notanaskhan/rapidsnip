@@ -159,6 +159,12 @@ class Supervisor:
             "end": j.end,
             "trigger": dataclasses.asdict(t),
             "folder": str(clip_folder(self.cfg.output_dir, cfg.name, t.moment, t.ratio)),
+            "layout": {
+                "enabled": self.cfg.layout.enabled,
+                "output": list(self.cfg.layout.output),
+                "facecam": list(cfg.layout.facecam) if cfg.layout.facecam else None,
+                "gameplay": list(cfg.layout.gameplay) if cfg.layout.gameplay else None,
+            },
         }
 
     def _finish(self, p: Pending, ok: bool) -> None:

@@ -43,9 +43,9 @@ channels:
     # optional per-channel overrides:
     # ratio_threshold: 3.0
     # chat_delay_seconds: 6
-    layout:
-      facecam: null             # [x, y, w, h] in source pixels; null = no facecam (set with tools/calibrate.py)
-      gameplay: null            # [x, y, w, h]; null = full frame
+    layout:                     # [x, y, w, h] in 1920x1080 pixels, from tools/calibrate.py (2026-11-18)
+      facecam: [0, 460, 388, 242]     # null = no facecam
+      gameplay: [400, 0, 1300, 1080]  # null = full frame; skips facecam column and chat overlay
 
   - name: carryminati           # streams on YouTube (CarryisLive); Twitch channel is not live. YouTube is phase 2.
     display_name: CarryMinati
