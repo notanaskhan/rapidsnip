@@ -117,6 +117,7 @@ class Detector:
         self.scores: deque[tuple[float, float, bool]] = deque()   # (window_end, score, excluded)
         self.bin_scores: deque[tuple[float, float]] = deque()     # (bin_end, score) of non-excluded bins
         self.pause_until = 0.0
+        self.blind: list[list[float | None]] = []    # [start, end] spans with no chat feed (end None = ongoing)
         self.sub_times: deque[float] = deque()
         self.open: _Open | None = None
         self.last_hot_end = -1e18     # last hot window of the most recent trigger
@@ -160,6 +161,24 @@ class Detector:
                 self.pause_until = max(self.pause_until, ev.ts + self.det.pause_after_event_seconds)
 
     # ---- evaluation -------------------------------------------------
+
+    def chat_state(self, connected: bool, last_rx: float, now: float) -> None:
+        """Tell the detector whether chat is flowing. Windows overlapping an outage can't
+        trigger and stay out of the baseline, so a gap doesn't make normal chat look like a spike."""
+        open_span = self.blind[-1] if self.blind and self.blind[-1][1] is None else None
+        if not connected and open_span is None:
+            start = min(last_rx, now)
+            self.blind.append([start, None])
+            # Windows already scored after the last line received were scored on missing data.
+            self.scores = deque((t, sc, ex or t > start) for t, sc, ex in self.scores)
+            self.bin_scores = deque((t, v) for t, v in self.bin_scores if t <= start)
+        elif connected and open_span is not None:
+            open_span[1] = now + self.det.window_seconds    # first full window after reconnecting
+        self.blind = [b for b in self.blind if b[1] is None or b[1] > now - self.det.baseline_minutes * 60]
+
+    def _is_blind(self, t_end: float) -> bool:
+        w0 = t_end - self.det.window_seconds
+        return any(a < t_end and (b is None or w0 < b) for a, b in self.blind)
 
     def tick(self, now: float) -> list[Trigger]:
         """Evaluate every window that has fully closed by `now`. Returns new/updated triggers."""
@@ -214,7 +233,7 @@ class Detector:
         baseline, mad = self._baseline()
         self.last_score, self.last_baseline, self.last_mad = score, baseline, mad
 
-        paused = t_end < self.pause_until
+        paused = t_end < self.pause_until or self._is_blind(t_end)
         warm = t_end < self.started_at + self.det.warmup_minutes * 60
         above = (score >= self.det.ratio_threshold * baseline
                  and score >= baseline + self.det.z_threshold * mad)

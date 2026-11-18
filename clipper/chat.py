@@ -26,7 +26,7 @@ PORT = 6697
 JOIN_INTERVAL = 0.5          # 20 joins per 10 s
 IDLE_PING_SECONDS = 30       # send our own PING after this long with no data
 PONG_TIMEOUT = 10            # reconnect if nothing comes back within this
-MAX_BACKOFF = 30
+MAX_BACKOFF = 15
 
 
 @dataclass
@@ -141,6 +141,7 @@ class TwitchChat:
         self.log = ChatLog(log_dir) if log_dir else None
         self.connected = asyncio.Event()
         self.reconnects = 0
+        self.last_rx = time.time()   # last line received from Twitch, any channel
         self._writer: asyncio.StreamWriter | None = None
         self._joined: set[str] = set()
         self._stop = False
@@ -235,6 +236,7 @@ class TwitchChat:
                 raise ConnectionError("server closed connection")
             awaiting_pong = False
             recv_ts = time.time()
+            self.last_rx = recv_ts
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             tags, prefix, command, params = parse_line(line)
             if command == "PING":

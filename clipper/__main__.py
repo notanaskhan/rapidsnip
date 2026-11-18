@@ -28,9 +28,11 @@ def main() -> None:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO, format="%(message)s", datefmt="%H:%M:%S",
-        handlers=[RichHandler(console=console, show_path=False),
-                  logging.FileHandler(cfg.data_dir / "clipper.log")],
+        handlers=[RichHandler(console=console, show_path=False)],
     )
+    file_log = logging.FileHandler(cfg.data_dir / "clipper.log")
+    file_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
+    logging.getLogger().addHandler(file_log)
     logging.getLogger("streamlink").setLevel(logging.WARNING)
     log = logging.getLogger("clipper")
 

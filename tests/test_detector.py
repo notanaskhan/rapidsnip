@@ -178,3 +178,34 @@ def test_reaction_matcher():
     assert m.find("no   way bro 💀") == {"NO WAY", "💀"}
     assert m.find("nowayyy") == set()
     assert m.find("CLIP IT CLIP IT") == {"CLIP IT"}
+
+
+def test_chat_outage_does_not_fake_a_spike():
+    """Chat feed lost for 4 min (noticed 30 s late), then normal chat resumes: no trigger."""
+    rng = random.Random(14)
+    items = [m for m in flat_chat(rng, T0, T0 + 900, per_bin=(6, 10)) if not SPIKE <= m.ts < SPIKE + 240]
+    det = Detector("c", DetectorConfig(), ClipConfig(), started_at=T0)
+    out = []
+    last_rx = T0
+    t = T0
+    for m in sorted(items, key=lambda m: m.ts):
+        while t < m.ts:                        # tick through the silence too, like the live app
+            connected = not (SPIKE + 30 <= t < SPIKE + 240)
+            det.chat_state(connected, last_rx, t)
+            out += det.tick(t)
+            t += 1
+        det.feed(m)
+        last_rx = m.ts
+    assert out == []
+
+
+def test_chat_outage_without_blind_marking_would_trigger():
+    """Same outage with the detector told nothing: shows the guard above is doing the work."""
+    rng = random.Random(14)
+    items = [m for m in flat_chat(rng, T0, T0 + 900, per_bin=(6, 10)) if not SPIKE <= m.ts < SPIKE + 240]
+    det = Detector("c", DetectorConfig(), ClipConfig(), started_at=T0)
+    out = []
+    for m in sorted(items, key=lambda m: m.ts):
+        det.feed(m)
+        out += det.tick(m.ts)
+    assert out, "a long outage drags the baseline down; resumed chat then looks like a spike"

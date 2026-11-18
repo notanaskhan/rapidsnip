@@ -219,6 +219,7 @@ class Supervisor:
         while True:
             now = time.time()
             for s in list(self.sessions.values()):
+                s.detector.chat_state(self.chat.connected.is_set(), self.chat.last_rx, now)
                 self._handle_triggers(s, s.detector.tick(now))
             await asyncio.sleep(TICK_SECONDS)
 
