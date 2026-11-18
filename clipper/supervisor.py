@@ -18,7 +18,8 @@ from .clip_job import ClipJob
 from .config import ChannelConfig, Config
 from .detector import Detector, Trigger
 from .live_watch import LiveWatcher
-from .output import clip_folder
+from .notify import notify
+from .output import clip_folder, write_index
 from .recorder import Recorder
 from .worker import WorkerHandle
 
@@ -187,6 +188,9 @@ class Supervisor:
             p, self.busy = self.busy, None
             if msg["ok"]:
                 log.info("clip ready: %s (%s)", msg["folder"], msg["timings"])
+                if p:
+                    t = p.job.trigger
+                    notify(f"{p.session.cfg.display_name} {t.ratio:.1f}x spike", subtitle=msg.get("title", ""))
             else:
                 log.error("clip failed: %s\n%s", msg["error"], msg.get("trace", ""))
             if p:
@@ -226,6 +230,8 @@ class Supervisor:
     # ---- lifecycle --------------------------------------------------
 
     async def run(self) -> None:
+        write_index(self.cfg.output_dir)
+        log.info("review page: %s", self.cfg.output_dir / "index.html")
         self.worker.start()
         for name in self.channels:
             await self.chat.join(name)

@@ -5,6 +5,7 @@ only ever holds the job it is working on. Jobs and results are plain dicts.
 """
 from __future__ import annotations
 
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -21,7 +22,7 @@ def _process(job: dict, captions_cfg: dict) -> dict:
     from . import captions
     from .cutter import cut
     from .layout import render
-    from .output import write_meta
+    from .output import write_index, write_meta
     from .recorder import Anchor, Segment
 
     timings = {}
@@ -49,9 +50,10 @@ def _process(job: dict, captions_cfg: dict) -> dict:
     timings["render"] = round(time.time() - t2, 1)
     timings["total"] = round(time.time() - t0, 1)
 
-    write_meta(folder, job, transcript=transcript, timings=timings)
+    meta = write_meta(folder, job, transcript=transcript, timings=timings)
+    write_index(folder.parent.parent)
     return {"folder": str(folder), "duration": res.duration, "timings": timings,
-            "captions": len(caps)}
+            "captions": len(caps), "title": json.loads(meta.read_text())["suggested_title"]}
 
 
 def worker_main(in_q: mp.Queue, out_q: mp.Queue, captions_cfg: dict | None = None) -> None:
