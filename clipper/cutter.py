@@ -1,6 +1,7 @@
 """Join the covering segments and cut the exact window, re-encoding on the Apple encoder."""
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,8 +81,10 @@ class Source:
     height: int
     has_audio: bool
     duration: float
-    vtrim: str = ""          # filter prefix for [0:v], ends with "," when set
-    atrim: str = ""          # filter prefix for [0:a], ends with "," when set
+    vtrim: str = ""          # filter prefix for the video input, ends with "," when set
+    atrim: str = ""          # filter prefix for the audio input, ends with "," when set
+    vin: str = "0:v"         # stream labels in the filter graph
+    ain: str = "0:a"
 
 
 def has_audio(path: Path) -> bool:
@@ -114,13 +117,47 @@ def source_from_segments(segments: list[Segment], start: float, end: float, out_
     )
 
 
+def source_from_input(inp: dict, start: float, end: float) -> Source:
+    """Window of a remote source (link clipper): seek each input, read only the window.
+
+    `inp` = {"args": [... "-i", url, ...], "video": "0:v:0", "audio": "1:a:0"} from links.media_inputs.
+    Input seeking while re-encoding is frame-accurate and resets timestamps to the window start.
+    """
+    duration = end - start
+    args, out = list(inp["args"]), []
+    i = 0
+    while i < len(args):
+        if args[i] == "-i":
+            out += ["-ss", f"{start:.3f}", "-t", f"{duration + 1:.3f}", "-i", args[i + 1]]
+            i += 2
+        else:
+            out.append(args[i])
+            i += 1
+    vin = inp.get("video", "0:v:0")
+    ain = inp.get("audio") or ""
+    return Source(out, 0, 0, bool(ain), duration,
+                  vtrim=f"trim=duration={duration:.3f},setpts=PTS-STARTPTS,",
+                  atrim=f"atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,",
+                  vin=vin, ain=ain or "0:a")
+
+
 def extract_wav(src: Source, wav: Path) -> Path | None:
     """16 kHz mono WAV of the clip window, for Whisper. None if there is no audio."""
     if not src.has_audio:
         return None
-    run_ffmpeg([*src.input_args, "-vn", "-af", f"{src.atrim}aresample=16000", "-ac", "1",
-                "-c:a", "pcm_s16le", str(wav)])
+    run_ffmpeg([*src.input_args, "-filter_complex", f"[{src.ain}]{src.atrim}aresample=16000[a]",
+                "-map", "[a]", "-ac", "1", "-c:a", "pcm_s16le", str(wav)])
     return wav
+
+
+def probe_input_size(src: Source) -> tuple[int, int]:
+    """Width/height of a remote source by decoding one frame of it."""
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", *src.input_args, "-map", src.vin,
+                          "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True).stderr
+    m = re.search(r"Stream #\d+:\d+.*Video:.* (\d{2,5})x(\d{2,5})", out)
+    if not m:
+        raise RuntimeError("could not read the source video size")
+    return int(m.group(1)), int(m.group(2))
 
 
 def thumbnail(video: Path, at: float, out: Path) -> Path:

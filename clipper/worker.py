@@ -21,7 +21,8 @@ log = logging.getLogger(__name__)
 def _process(job: dict, captions_cfg: dict) -> dict:
     """Segments -> (Whisper on the window's audio) -> vertical + horizontal in one encode -> meta."""
     from . import captions
-    from .cutter import extract_wav, probe_duration, source_from_segments, thumbnail
+    from .cutter import (extract_wav, probe_duration, probe_input_size, source_from_input,
+                         source_from_segments, thumbnail)
     from .layout import render
     from .output import write_index, write_meta
     from .recorder import Anchor, Segment
@@ -29,8 +30,13 @@ def _process(job: dict, captions_cfg: dict) -> dict:
     timings = {}
     t0 = time.time()
     folder = Path(job["folder"])
-    segs = [Segment(Path(p), a, b, Anchor(0.0), "") for p, a, b in job["segments"]]
-    src = source_from_segments(segs, job["start"], job["end"], folder)
+    if job.get("input"):                       # link clipper: read the window from the source URL
+        folder.mkdir(parents=True, exist_ok=True)
+        src = source_from_input(job["input"], job["start"], job["end"])
+        src.width, src.height = probe_input_size(src)
+    else:
+        segs = [Segment(Path(p), a, b, Anchor(0.0), "") for p, a, b in job["segments"]]
+        src = source_from_segments(segs, job["start"], job["end"], folder)
 
     transcript = ""
     caps = []

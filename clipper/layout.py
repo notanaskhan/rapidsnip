@@ -85,9 +85,9 @@ def render(src: Source | Path, out_dir: Path, caps: list[Caption], facecam, game
     outputs: dict[str, Path] = {}
     graph = []
     splits = ["[h0]"] + (["[v0]"] if vertical else [])
-    graph.append(f"[0:v]{src.vtrim}split={len(splits)}{''.join(splits)}")
+    graph.append(f"[{src.vin}]{src.vtrim}split={len(splits)}{''.join(splits)}")
     if src.has_audio:
-        graph.append(f"[0:a]{src.atrim}asplit={len(splits)}" + "".join(f"[a{i}]" for i in range(len(splits))))
+        graph.append(f"[{src.ain}]{src.atrim}asplit={len(splits)}" + "".join(f"[a{i}]" for i in range(len(splits))))
 
     # Horizontal: same frame, captions bottom-centre.
     if caps:

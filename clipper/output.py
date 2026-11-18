@@ -42,12 +42,13 @@ def suggest_description(display_name: str, credit_url: str) -> str:
 def write_meta(folder: Path, job: dict, transcript: str = "", timings: dict | None = None) -> Path:
     t = job["trigger"]
     meta = {
+        "source": job.get("source", "live"),
         "channel": job["channel"],
         "display_name": job["display_name"],
         "credit_url": job["credit_url"],
         "permission": job["permission"],
-        "moment": t["moment"],
-        "moment_local": datetime.fromtimestamp(t["moment"]).isoformat(timespec="seconds"),
+        "moment": job.get("moment_wall", t["moment"]),
+        "moment_local": datetime.fromtimestamp(job.get("moment_wall", t["moment"])).isoformat(timespec="seconds"),
         "window": {"start": job["start"], "end": job["end"], "seconds": round(job["end"] - job["start"], 2)},
         "onset": t["onset"],
         "detected_at": t["detected_at"],
@@ -60,6 +61,9 @@ def write_meta(folder: Path, job: dict, transcript: str = "", timings: dict | No
         "suggested_title": suggest_title(job["display_name"], t["reaction_counts"], transcript),
         "suggested_description": suggest_description(job["display_name"], job["credit_url"]),
         "timings": timings or {},
+        **({"link_job_id": job["link_job_id"], "source_url": job.get("source_url", ""),
+            "source_title": job.get("source_title", ""), "source_offset": job.get("source_offset")}
+           if job.get("source") == "link" else {}),
         "created": datetime.now().isoformat(timespec="seconds"),
     }
     path = folder / "meta.json"

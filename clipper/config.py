@@ -55,6 +55,10 @@ class ChannelLayout:
     gameplay: tuple[int, int, int, int] | None = None
 
 
+PLATFORMS = ("twitch", "youtube", "kick")
+LIVE_PLATFORMS = ("twitch",)        # platforms the live recorder supports today
+
+
 @dataclass
 class ChannelConfig:
     name: str
@@ -64,10 +68,16 @@ class ChannelConfig:
     detector: DetectorConfig
     clip: ClipConfig
     layout: ChannelLayout
+    platform: str = "twitch"
+    enabled: bool = True
 
     @property
     def allowed(self) -> bool:
         return bool(self.permission and self.permission.strip())
+
+    @property
+    def recordable(self) -> bool:
+        return self.allowed and self.enabled and self.platform in LIVE_PLATFORMS
 
 
 @dataclass
@@ -101,6 +111,38 @@ def _overrides(cls, base, raw: dict):
     return dataclasses.replace(base, **picked)
 
 
+CHANNEL_KEYS = {"name", "display_name", "permission", "credit_url", "layout", "platform", "enabled"}
+OVERRIDE_KEYS = {f.name for f in dataclasses.fields(DetectorConfig)} | {f.name for f in dataclasses.fields(ClipConfig)}
+
+
+def channel_from_dict(ch: dict, detector: DetectorConfig, clip: ClipConfig) -> ChannelConfig:
+    """One channel entry (from config.yaml or the database) merged over the global sections."""
+    name = str(ch["name"]).lower().strip()
+    unknown = set(ch) - CHANNEL_KEYS - OVERRIDE_KEYS
+    if unknown:
+        raise ValueError(f"channel {name}: unknown keys {sorted(unknown)}")
+    platform = str(ch.get("platform") or "twitch").lower()
+    if platform not in PLATFORMS:
+        raise ValueError(f"channel {name}: platform must be one of {PLATFORMS}")
+    lay = ch.get("layout") or {}
+    default_url = {"twitch": f"https://twitch.tv/{name}", "youtube": f"https://www.youtube.com/@{name}",
+                   "kick": f"https://kick.com/{name}"}[platform]
+    return ChannelConfig(
+        name=name,
+        display_name=str(ch.get("display_name") or name),
+        permission=str(ch.get("permission") or ""),
+        credit_url=ch.get("credit_url") or default_url,
+        detector=_overrides(DetectorConfig, detector, ch),
+        clip=_overrides(ClipConfig, clip, ch),
+        layout=ChannelLayout(
+            facecam=tuple(lay["facecam"]) if lay.get("facecam") else None,
+            gameplay=tuple(lay["gameplay"]) if lay.get("gameplay") else None,
+        ),
+        platform=platform,
+        enabled=bool(ch.get("enabled", True)),
+    )
+
+
 def load_config(path: str | Path = "config.yaml") -> Config:
     path = Path(path)
     raw = yaml.safe_load(path.read_text()) or {}
@@ -116,31 +158,12 @@ def load_config(path: str | Path = "config.yaml") -> Config:
 
     channels = []
     seen = set()
-    channel_keys = {"name", "display_name", "permission", "credit_url", "layout"}
-    section_keys = {f.name for f in dataclasses.fields(DetectorConfig)} | {
-        f.name for f in dataclasses.fields(ClipConfig)
-    }
     for ch in raw.get("channels") or []:
-        name = str(ch["name"]).lower().strip()
-        if name in seen:
-            raise ValueError(f"duplicate channel {name}")
-        seen.add(name)
-        unknown = set(ch) - channel_keys - section_keys
-        if unknown:
-            raise ValueError(f"channel {name}: unknown keys {sorted(unknown)}")
-        lay = ch.get("layout") or {}
-        channels.append(ChannelConfig(
-            name=name,
-            display_name=str(ch.get("display_name") or name),
-            permission=str(ch.get("permission") or ""),
-            credit_url=ch.get("credit_url") or f"https://twitch.tv/{name}",
-            detector=_overrides(DetectorConfig, detector, ch),
-            clip=_overrides(ClipConfig, clip, ch),
-            layout=ChannelLayout(
-                facecam=tuple(lay["facecam"]) if lay.get("facecam") else None,
-                gameplay=tuple(lay["gameplay"]) if lay.get("gameplay") else None,
-            ),
-        ))
+        c = channel_from_dict(ch, detector, clip)
+        if c.name in seen:
+            raise ValueError(f"duplicate channel {c.name}")
+        seen.add(c.name)
+        channels.append(c)
 
     return Config(
         output_dir=(root / raw.get("output_dir", "./clips")).resolve(),
