@@ -47,6 +47,7 @@ def main() -> None:
     p.add_argument("--min-chatters", type=int, help="override min_unique_chatters")
     p.add_argument("--chat-delay", type=float, help="override chat_delay_seconds")
     p.add_argument("--quiet", action="store_true", help="only print the summary")
+    p.add_argument("--peaks", type=int, default=0, help="also list the N biggest windows (score/baseline)")
     p.add_argument("--gap", type=float, default=60, help="silence (s) that splits the log into runs")
     args = p.parse_args()
 
@@ -71,6 +72,7 @@ def main() -> None:
     # detector after it, with its own warm-up, like the live app does on going live.
     det = Detector(channel, det_cfg, clip_cfg, started_at=items[0].ts)
     finals = []
+    windows = []
     runs = [[items[0].ts, items[0].ts]]
     prev_ts = items[0].ts
     for it in items:
@@ -82,6 +84,10 @@ def main() -> None:
         runs[-1][1] = it.ts
         det.feed(it)
         finals += [t for t in det.tick(it.ts) if t.final]
+        if args.peaks and det.last_baseline > 0:
+            windows.append((det.last_score / det.last_baseline, det.last_score, det.last_baseline,
+                            det.last_mad, det.next_bin * det.step, det.pause_until > det.next_bin * det.step,
+                            det.next_bin * det.step < det.started_at + det_cfg.warmup_minutes * 60))
     finals += [t for t in det.tick(items[-1].ts + 60) + det.flush() if t.final]
 
     if len(runs) > 1:
@@ -105,6 +111,20 @@ def main() -> None:
             print(f"     chat: {top}")
             if reacts:
                 print(f"     reactions: {reacts}")
+    if args.peaks:
+        print(f"\nbiggest windows (need ratio >= {det_cfg.ratio_threshold} and score >= baseline + "
+              f"{det_cfg.z_threshold} x MAD):")
+        seen = []
+        for r, sc, bl, mad, t, paused, warm in sorted(windows, reverse=True):
+            if any(abs(t - u) < 30 for u in seen):
+                continue
+            seen.append(t)
+            need = max(det_cfg.ratio_threshold * bl, bl + det_cfg.z_threshold * mad)
+            flags = " PAUSED" if paused else (" WARM-UP" if warm else "")
+            print(f"  {hhmmss(t)}  {r:4.1f}x  score {sc:5.0f}  baseline {bl:5.0f}  MAD {mad:4.0f}  "
+                  f"needs {need:5.0f}{flags}")
+            if len(seen) >= args.peaks:
+                break
     rate = len(finals) / span_h if span_h > 0 else 0
     print(f"\n{len(finals)} triggers = {rate:.1f}/hour (target 2-6/hour)")
 

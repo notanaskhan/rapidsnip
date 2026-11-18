@@ -25,6 +25,7 @@ SUB_EVENTS = {"sub", "resub", "subgift", "anonsubgift"}
 SUB_BURST_COUNT = 5
 SUB_BURST_SECONDS = 30
 ONSET_FACTOR = 1.5
+ONSET_Z = 3.0                # a bin must also beat the per-bin median by this many MADs
 ONSET_MAX_LOOKBACK = 30      # seconds before the trigger window to search for onset
 SETTLE_SECONDS = 1.0         # evaluate a window only once its last bin is this far in the past
 TOP_MESSAGES = 10
@@ -114,6 +115,7 @@ class Detector:
         self.matcher = ReactionMatcher(det.reactions)
         self.bins: dict[int, Bin] = {}
         self.scores: deque[tuple[float, float, bool]] = deque()   # (window_end, score, excluded)
+        self.bin_scores: deque[tuple[float, float]] = deque()     # (bin_end, score) of non-excluded bins
         self.pause_until = 0.0
         self.sub_times: deque[float] = deque()
         self.open: _Open | None = None
@@ -235,9 +237,20 @@ class Detector:
         # or an empty starting baseline would mark every window as a spike.
         excluded = not warm and (in_trigger or paused)
         self.scores.append((t_end, score, excluded))
+        if not excluded:
+            self.bin_scores.append((t_end, self._bin_score(last_bin)))
 
     def _onset(self, last_bin: int, baseline: float) -> float:
-        thresh = ONSET_FACTOR * baseline / self.bins_per_window   # per-bin share of a window baseline
+        # Single 2 s bins are much noisier than 10 s windows, so judge them against their own
+        # history: above 1.5x the per-bin median and median + 3 MAD.
+        vals = [v for _, v in self.bin_scores]
+        if vals:
+            med = statistics.median(vals)
+            mad = statistics.median(abs(v - med) for v in vals)
+        else:
+            med, mad = baseline / self.bins_per_window, 0.0
+        med = max(med, 1.0 / self.bins_per_window)
+        thresh = max(ONSET_FACTOR * med, med + ONSET_Z * mad)
         first = last_bin - self.bins_per_window + 1
         floor = first - int(ONSET_MAX_LOOKBACK / self.step)
         i = last_bin
@@ -313,6 +326,8 @@ class Detector:
         horizon = self.next_bin * self.step - self.det.baseline_minutes * 60
         while self.scores and self.scores[0][0] < horizon:
             self.scores.popleft()
+        while self.bin_scores and self.bin_scores[0][0] < horizon:
+            self.bin_scores.popleft()
         keep_from = int((horizon - ONSET_MAX_LOOKBACK - self.clip.max_length_seconds) // self.step)
         if self.open and self.open.bins:
             keep_from = min(keep_from, self.open.bins[0])

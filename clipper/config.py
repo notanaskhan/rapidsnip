@@ -23,6 +23,7 @@ class DetectorConfig:
     reactions: list[str] = field(default_factory=lambda: [
         "LUL", "LULW", "OMEGALUL", "KEKW", "LMAO", "LMFAO", "💀", "😂", "WTF",
         "NO WAY", "HOLY", "CLIP", "CLIP IT", "Pog", "PogChamp", "monkaS", "W", "L",
+        "LOL", "LOLW", "ICANT", "MegaLUL", "KEKL", "😭", "OMG", "D:", "monkaW",
     ])
 
 
