@@ -143,7 +143,7 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
 
     app = FastAPI(title="Clipper", lifespan=lifespan)
     app.state.sup, app.state.db, app.state.cfg = sup, db, cfg
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3210", "http://127.0.0.1:3210"],
                        allow_methods=["*"], allow_headers=["*"])
 
     async def apply_streamers():

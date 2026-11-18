@@ -1,0 +1,7 @@
+.shell { display: flex; min-height: 100vh; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+@media (max-width: 760px) {
+  .shell { display: block; }
+  .main { padding-bottom: 64px; }
+}

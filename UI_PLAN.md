@@ -11,7 +11,7 @@ Mac
 │   ├─ Link jobs: yt-dlp download -> chat replay / "most replayed" / loudness -> candidate moments -> worker
 │   ├─ SQLite  data/clipper.db: streamers, clips (+ review status), link jobs
 │   └─ /media -> clips/ on disk (range requests, so videos seek and download)
-└─ Next.js UI  (TypeScript, React, plain CSS modules, :3000)
+└─ Next.js UI  (TypeScript, React, plain CSS modules, :3210)
     └─ /api and /media proxied to :8000, so the browser sees one origin
 ```
 
@@ -19,7 +19,7 @@ Mac
 - `config.yaml` keeps global settings (thresholds, layout, captions). Streamers move to the database; the channels in `config.yaml` are imported once on first start.
 - Permission rule stays: a streamer or link job without a permission note is never recorded or clipped.
 - The UI polls `/api/status` every 2 s (no websockets needed at this scale).
-- Phone on the same Wi-Fi can open `http://<mac-name>.local:3000`.
+- Phone on the same Wi-Fi can open `http://<mac-name>.local:3210`.
 
 ## Pages
 

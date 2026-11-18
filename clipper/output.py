@@ -21,15 +21,22 @@ def clip_folder(output_dir: Path, channel: str, moment: float, ratio: float) -> 
     return Path(output_dir) / dt.strftime("%Y-%m-%d") / f"{channel}_{dt.strftime('%H%M%S')}_{ratio:.1f}x"
 
 
-def suggest_title(display_name: str, reactions: dict[str, int], transcript: str = "") -> str:
+SKIP_HOOKS = {"W", "L"}           # one-letter reactions make meaningless titles
+
+
+def suggest_title(display_name: str, reactions: dict[str, int], transcript: str = "",
+                  source: str = "live") -> str:
     hook = ""
     words = transcript.strip().split()
-    if 2 <= len(words):
+    if len(words) >= 2:
         hook = " ".join(words[:8]).strip(" ,.") + ("…" if len(words) > 8 else "")
         hook = f'"{hook}"'
-    elif reactions:
-        top = Counter(reactions).most_common(1)[0][0]
-        hook = HOOKS.get(top, top)
+    else:
+        top = next((r for r, _ in Counter(reactions).most_common() if r not in SKIP_HOOKS), None)
+        if top:
+            hook = HOOKS.get(top, top)
+    if source == "link":                       # any video: don't assume the game
+        return f"{display_name} {hook}".strip() or display_name
     return f"{display_name} in GTA 6 {hook} #GTA6".replace("  ", " ").strip()
 
 
@@ -58,7 +65,8 @@ def write_meta(folder: Path, job: dict, transcript: str = "", timings: dict | No
         "top_messages": t["top_messages"],
         "reaction_counts": t["reaction_counts"],
         "transcript": transcript,
-        "suggested_title": suggest_title(job["display_name"], t["reaction_counts"], transcript),
+        "suggested_title": suggest_title(job["display_name"], t["reaction_counts"], transcript,
+                                         job.get("source", "live")),
         "suggested_description": suggest_description(job["display_name"], job["credit_url"]),
         "timings": timings or {},
         **({"link_job_id": job["link_job_id"], "source_url": job.get("source_url", ""),
