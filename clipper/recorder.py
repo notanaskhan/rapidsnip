@@ -189,7 +189,7 @@ class Recorder:
             streamlink = await asyncio.create_subprocess_exec(
                 _tool("streamlink"), "--twitch-low-latency", "--twitch-supported-codecs", "h264",
                 "--loglevel", "warning", "--stdout", url, self.quality,
-                stdout=w, stderr=sl_log,
+                stdout=w, stderr=sl_log, start_new_session=True,
             )
             ffmpeg = await asyncio.create_subprocess_exec(
                 _tool("ffmpeg"), "-hide_banner", "-loglevel", "warning", "-nostdin",
@@ -197,7 +197,7 @@ class Recorder:
                 "-f", "segment", "-segment_time", str(SEGMENT_SECONDS), "-reset_timestamps", "1",
                 "-segment_format", "mpegts", "-segment_list", str(index),
                 "-segment_list_type", "csv", str(folder / "seg_%06d.ts"),
-                stdin=r, stdout=asyncio.subprocess.DEVNULL, stderr=ff_log,
+                stdin=r, stdout=asyncio.subprocess.DEVNULL, stderr=ff_log, start_new_session=True,
             )
         finally:
             os.close(r)

@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
 import queue
+import signal
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -241,14 +243,31 @@ class Supervisor:
             asyncio.create_task(self._tick_loop(), name="tick"),
             asyncio.create_task(self._results_loop(), name="results"),
         ]
+        # Own the signals: a process started in the background can inherit "ignore SIGINT",
+        # and `kill` sends SIGTERM. A second signal forces an exit.
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def on_signal(sig: signal.Signals) -> None:
+            if stop.is_set():
+                log.warning("second %s: exiting now", sig.name)
+                os._exit(130)
+            log.info("%s received", sig.name)
+            stop.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, on_signal, sig)
         try:
             with Live(self.table(), console=self.console, refresh_per_second=1) as live:
-                while True:
+                while not stop.is_set():
                     live.update(self.table())
                     for t in tasks:
-                        if t.done() and t.exception():
+                        if t.done() and not t.cancelled() and t.exception():
                             raise t.exception()
-                    await asyncio.sleep(2)
+                    try:
+                        await asyncio.wait_for(stop.wait(), 2)
+                    except asyncio.TimeoutError:
+                        pass
         finally:
             await self.shutdown(tasks)
 

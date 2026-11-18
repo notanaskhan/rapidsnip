@@ -48,6 +48,14 @@ channels:
       facecam: [0, 460, 388, 242]     # null = no facecam
       gameplay: [400, 0, 1300, 1080]  # null = full frame; skips facecam column and chat overlay
 
+  - name: kaicenat
+    display_name: Kai Cenat
+    permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
+    credit_url: https://twitch.tv/kaicenat
+    layout:                     # from tools/calibrate.py (2026-11-18)
+      facecam: [0, 432, 392, 220]
+      gameplay: [400, 90, 1300, 990]  # skips facecam, on-screen chat, viewer counter, compass bar
+
   - name: carryminati           # streams on YouTube (CarryisLive); Twitch channel is not live. YouTube is phase 2.
     display_name: CarryMinati
     permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
