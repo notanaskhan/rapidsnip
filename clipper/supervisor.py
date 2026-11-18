@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 
 TICK_SECONDS = 1.0
 STALE_SECONDS = 15 * 60      # drop jobs whose moment is older than this
+STATUS_EVERY = 300
 
 
 @dataclass
@@ -199,6 +200,21 @@ class Supervisor:
                 self._finish(p, ok=msg["ok"])
             self._dispatch()
 
+    async def _status_loop(self) -> None:
+        """One log line every 5 minutes, so a run without a terminal can still be checked."""
+        while True:
+            await asyncio.sleep(STATUS_EVERY)
+            parts = []
+            for name, s in self.sessions.items():
+                parts.append(f"{name}: buffer {s.recorder.buffered_seconds / 60:.1f}m, "
+                             f"{len(s.recorder.segments)} segs, restarts {s.recorder.stats.restarts}, "
+                             f"score {s.detector.last_score:.0f}/{s.detector.last_baseline:.0f}, "
+                             f"clips {s.clips}, dropped {s.dropped}")
+            log.info("status: clips %d, queue %d, chat %s, reconnects %d | %s", self.clips_total,
+                     len(self.pending) + (1 if self.busy else 0),
+                     "up" if self.chat.connected.is_set() else "DOWN", self.chat.reconnects,
+                     "; ".join(parts) or "no live channels")
+
     async def _tick_loop(self) -> None:
         while True:
             now = time.time()
@@ -242,6 +258,7 @@ class Supervisor:
             asyncio.create_task(self.watcher.run(), name="live-watch"),
             asyncio.create_task(self._tick_loop(), name="tick"),
             asyncio.create_task(self._results_loop(), name="results"),
+            asyncio.create_task(self._status_loop(), name="status"),
         ]
         # Own the signals: a process started in the background can inherit "ignore SIGINT",
         # and `kill` sends SIGTERM. A second signal forces an exit.

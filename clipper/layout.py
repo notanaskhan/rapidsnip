@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import captions as cap
 from .captions import Caption
-from .cutter import probe_size, run_ffmpeg
+from .cutter import Source, run_ffmpeg, source_from_file
 
 REF_WIDTH = 1920
 TOP_FRACTION = 0.35          # facecam band = 672 of 1920
@@ -75,15 +75,19 @@ def plan_vertical(src_w: int, src_h: int, facecam, gameplay, out_w: int, out_h: 
     return VerticalPlan(f, caption_y=fg_y + fg_h + round(font * 1.4), font_size=font)
 
 
-def render(raw: Path, out_dir: Path, caps: list[Caption], facecam, gameplay,
+def render(src: Source | Path, out_dir: Path, caps: list[Caption], facecam, gameplay,
            output: tuple[int, int] = (1080, 1920), vertical: bool = True) -> dict[str, Path]:
-    """Write vertical.mp4 (if enabled) and horizontal.mp4, both with captions if any."""
-    src_w, src_h = probe_size(raw)
+    """Write vertical.mp4 (if enabled) and horizontal.mp4, both with captions if any, in one pass."""
+    if isinstance(src, Path):
+        src = source_from_file(src)
+    src_w, src_h = src.width, src.height
     out_w, out_h = output
     outputs: dict[str, Path] = {}
     graph = []
     splits = ["[h0]"] + (["[v0]"] if vertical else [])
-    graph.append(f"[0:v]split={len(splits)}{''.join(splits)}")
+    graph.append(f"[0:v]{src.vtrim}split={len(splits)}{''.join(splits)}")
+    if src.has_audio:
+        graph.append(f"[0:a]{src.atrim}asplit={len(splits)}" + "".join(f"[a{i}]" for i in range(len(splits))))
 
     # Horizontal: same frame, captions bottom-centre.
     if caps:
@@ -104,15 +108,16 @@ def render(raw: Path, out_dir: Path, caps: list[Caption], facecam, gameplay,
         else:
             graph.append("[vraw]null[v]")
 
-    args = ["-i", str(raw), "-filter_complex", ";".join(graph)]
+    args = [*src.input_args, "-filter_complex", ";".join(graph)]
+    audio = ["-c:a", "aac", "-b:a", "160k"]
     horizontal = out_dir / "horizontal.mp4"
-    args += ["-map", "[h]", "-map", "0:a:0?", "-c:v", "h264_videotoolbox", "-b:v", HORIZONTAL_BITRATE,
-             "-c:a", "copy", "-movflags", "+faststart", str(horizontal)]
+    args += ["-map", "[h]", *(["-map", "[a0]"] if src.has_audio else []), "-c:v", "h264_videotoolbox",
+             "-b:v", HORIZONTAL_BITRATE, *audio, "-movflags", "+faststart", str(horizontal)]
     outputs["horizontal"] = horizontal
     if vertical:
         vpath = out_dir / "vertical.mp4"
-        args += ["-map", "[v]", "-map", "0:a:0?", "-c:v", "h264_videotoolbox", "-b:v", VERTICAL_BITRATE,
-                 "-c:a", "copy", "-movflags", "+faststart", str(vpath)]
+        args += ["-map", "[v]", *(["-map", "[a1]"] if src.has_audio else []), "-c:v", "h264_videotoolbox",
+                 "-b:v", VERTICAL_BITRATE, *audio, "-movflags", "+faststart", str(vpath)]
         outputs["vertical"] = vpath
     run_ffmpeg(args)
     return outputs

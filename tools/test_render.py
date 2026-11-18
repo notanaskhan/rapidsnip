@@ -102,6 +102,31 @@ def main() -> None:
     for f in frames:
         f.unlink()
     print(f"sheet: {sheet}")
+
+    # Frame accuracy: horizontal.mp4's first frame vs source frames around the requested start.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_cut import frame, psnr
+    first = folder / "first.png"
+    frame(folder / "horizontal.mp4", 0.0, first)
+    scores = []
+    for k in range(-15, 16):          # single-frame steps at 60 fps, +/- 0.25 s
+        d = k / 60
+        at = job["start"] + d
+        seg = next(((p_, s_, e_) for p_, s_, e_ in job["segments"] if s_ <= at < e_), None)
+        if not seg:
+            continue
+        ref = folder / "ref.png"
+        frame(Path(seg[0]), at - seg[1], ref)
+        if ref.exists():
+            scores.append((psnr(first, ref), d))
+            ref.unlink()
+    first.unlink()
+    best = max(scores)
+    runner = max((p_ for p_, d in scores if abs(d - best[1]) > 0.05), default=0)
+    acc_ok = abs(best[1]) <= 0.05 and best[0] - runner >= 3     # within 3 frames, clearly the best
+    print(f"first frame best matches source at {best[1]:+.3f}s ({best[1] * 60:+.0f} frames) (PSNR {best[0]:.1f} vs {runner:.1f}): "
+          f"{'ok' if acc_ok else 'BAD'}")
+    ok &= acc_ok
     print("RESULT:", "PASS" if ok else "FAIL")
 
 
