@@ -6,8 +6,9 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   devIndicators: { position: "bottom-right" },
-  // Lets a phone on the same Wi-Fi use the dev server via the Mac's Bonjour name (e.g. anas-mbp.local).
-  allowedDevOrigins: ["*.local"],
+  // Lets a phone use the dev server via the Mac's Bonjour name on the same Wi-Fi (e.g. anas-mbp.local)
+  // or its Tailscale MagicDNS name from anywhere (e.g. anas-mbp.tail1234.ts.net).
+  allowedDevOrigins: ["*.local", "*.ts.net"],
 };
 
 export default nextConfig;
