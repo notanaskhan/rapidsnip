@@ -179,6 +179,24 @@ Open **http://localhost:3210**.
 
 </details>
 
+<details>
+<summary><b>📱 Get every clip on your phone (Telegram)</b></summary>
+
+<br>
+
+Each new clip arrives in a private Telegram chat as a video you can save to Photos in one tap. The title and description are in tap-to-copy blocks, and **Approve / Posted / Reject** buttons update the app on the Mac. A reject from the phone gets the same 8-second undo.
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token it gives you.
+2. Pair your phone:
+   ```bash
+   uv run python -m clipper telegram --token <token>
+   ```
+   Open the link it prints and press **Start**. A running `clipper serve` picks up the pairing within 10 seconds.
+
+Clips over Telegram's 50 MB bot limit are sent as a slightly smaller copy (~38 MB, same 1080×1920). The token stays in `data/telegram.json`, which is git-ignored, and only your chat can press the buttons.
+
+</details>
+
 ---
 
 ## ⚙️ Configuration
@@ -275,7 +293,7 @@ Each clip folder contains `vertical.mp4`, `horizontal.mp4`, `thumb.jpg`, caption
 
 - **Permission first.** A channel without a non-empty `permission` note is never recorded or clipped.
 - **Always credit.** Every `meta.json` and description carries the streamer's `credit_url`.
-- **Nothing is uploaded automatically.** The output is a folder of clips plus a review UI, and a human approves every post.
+- **Nothing is posted automatically.** The output is a folder of clips plus a review UI (and, if you pair it, your private Telegram), and a human approves every post.
 - **Rejecting is final.** A rejected clip is deleted from disk after an 8-second undo window. Its chat stats are kept in `data/rejected.jsonl` for tuning.
 
 ---

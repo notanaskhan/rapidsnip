@@ -26,11 +26,17 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--remote", action="store_true",
                        help="require the shared key in data/api_key (for the hosted UI via a tunnel)")
+    tg = sub.add_parser("telegram", help="pair your phone: new clips are sent to a private Telegram bot")
+    tg.add_argument("--token", required=True, help="bot token from @BotFather")
     args = p.parse_args()
 
     cfg = load_config(args.config)
     console = Console()
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    if args.cmd == "telegram":
+        from .telegram import pair
+        pair(cfg.data_dir, args.token.strip())
+        return
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO, format="%(message)s", datefmt="%H:%M:%S",

@@ -174,6 +174,11 @@ class DB:
             r = c.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
             return dict(r) if r else None
 
+    def clip_by_folder(self, folder_rel: str) -> dict | None:
+        with self.conn() as c:
+            r = c.execute("SELECT * FROM clips WHERE folder = ?", (folder_rel,)).fetchone()
+            return dict(r) if r else None
+
     def update_clip(self, cid: int, data: dict) -> dict | None:
         fields = {k: v for k, v in data.items() if k in ("status", "title", "description")}
         if "status" in fields and fields["status"] not in CLIP_STATUSES:

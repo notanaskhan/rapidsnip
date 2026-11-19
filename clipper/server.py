@@ -39,6 +39,7 @@ from .config import PLATFORMS, LIVE_PLATFORMS, ChannelConfig, Config, OVERRIDE_K
 from .db import CLIP_STATUSES, DB
 from .output import write_index
 from .supervisor import Supervisor
+from .telegram import TelegramBot
 
 log = logging.getLogger(__name__)
 
@@ -158,6 +159,10 @@ def _jpeg(data: bytes, source: str) -> Response:
 def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | None = None) -> FastAPI:
     sup = Supervisor(cfg, db=db)
     clips_dir = cfg.output_dir
+    bot = TelegramBot(cfg, db, set_status=lambda cid, status: set_clip_status(cid, status),
+                      display_name=lambda login: next(
+                          (c.display_name for c in db_channels(cfg, db) if c.name == login), login))
+    sup.on_clip_ready = bot.clip_ready
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -168,6 +173,7 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
             log.info("indexed %d existing clips", added)
         await sup.set_channels(db_channels(cfg, db))
         await sup.start(live=live)
+        await bot.start()
         if links:
             links.attach(sup, app)
             await links.start()
@@ -177,6 +183,7 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
         finally:
             if links:
                 await links.stop()
+            await bot.stop()
             await sup.stop()
 
     app = FastAPI(title="Clipper", lifespan=lifespan)
@@ -209,6 +216,7 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
         st["disk"] = {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1),
                       "min_free_gb": cfg.min_free_gb}
         st["clips"] = db.clip_counts()
+        st["telegram"] = {"paired": bot.paired, "name": bot.settings.get("name", "")}
         st["now"] = time.time()
         return st
 
@@ -372,6 +380,7 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
         if clips_dir.resolve() in folder.parents and folder.exists():
             shutil.rmtree(folder)
         db.delete_clip(cid)
+        bot.clip_deleted(cid)
         write_index(clips_dir)
         log.info("deleted clip %s", row["folder"])
 
@@ -381,6 +390,17 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
         if row and row["status"] == "rejected":          # not undone
             await asyncio.to_thread(purge_clip, cid)
 
+    async def set_clip_status(cid: int, status: str) -> dict | None:
+        """The one place a clip's status changes (web UI or Telegram), so both stay in sync."""
+        if status not in CLIP_STATUSES:
+            raise ValueError(f"status must be one of {', '.join(CLIP_STATUSES)}")
+        row = db.update_clip(cid, {"status": status})
+        if row:
+            if status == "rejected":
+                asyncio.create_task(purge_after_grace(cid))     # undo = set the status back within the grace
+            bot.status_changed(cid, status)
+        return row
+
     @app.patch("/api/clips/{cid}")
     async def edit_clip(cid: int, body: ClipPatch):
         if not db.clip(cid):
@@ -388,11 +408,12 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
         patch = body.model_dump(exclude_unset=True)
         if "status" in patch and patch["status"] not in CLIP_STATUSES:
             raise HTTPException(422, f"status must be one of {', '.join(CLIP_STATUSES)}")
+        status = patch.pop("status", None)
         row = db.update_clip(cid, patch)
-        if patch.get("status") == "rejected":
-            asyncio.create_task(purge_after_grace(cid))     # undo = set the status back within the grace
+        if status:
+            row = await set_clip_status(cid, status)
         out = clip_out(row)
-        out["delete_in"] = REJECT_GRACE if patch.get("status") == "rejected" else None
+        out["delete_in"] = REJECT_GRACE if status == "rejected" else None
         return out
 
     @app.delete("/api/clips/{cid}", status_code=204)

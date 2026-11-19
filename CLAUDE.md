@@ -18,7 +18,7 @@ Mac app that watches Twitch streams live, detects highlight moments from chat sp
 - All internal times are wall-clock Unix seconds (`time.time()`); chat uses `tmi-sent-ts / 1000`.
 - `detector.py` is pure logic: no sockets, files or clocks passed implicitly. Keep it testable with `tools/replay.py`.
 - A channel without a non-empty `permission` note is never recorded. Every meta.json/description carries `credit_url`.
-- Nothing is uploaded automatically. Output ends at a folder of clips plus `clips/index.html`.
+- Nothing is posted automatically. Output ends at a folder of clips plus `clips/index.html`; each new clip may also be sent privately to the owner's paired Telegram chat (`clipper/telegram.py`), never anywhere public.
 - Build milestone by milestone (PLAN.md "Build order"); run each acceptance check before moving on.
 - If a choice isn't covered, pick the simplest option and log it in `DECISIONS.md`.
 - Run long sessions under `caffeinate -dims`. Refuse to start with < 20 GB free disk.

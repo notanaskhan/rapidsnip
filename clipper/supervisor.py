@@ -93,6 +93,7 @@ class Supervisor:
         self.pending: list[Pending] = []
         self.busy: Pending | None = None
         self.clips_total = 0
+        self.on_clip_ready = None       # called with the clip folder (relative to output_dir) once indexed
         self.started_at = 0.0
         self.tasks: list[asyncio.Task] = []
         self._stopping = False
@@ -277,9 +278,13 @@ class Supervisor:
         try:
             path = Path(folder)
             meta = json.loads((path / "meta.json").read_text())
-            self.db.upsert_clip_from_meta(str(path.relative_to(self.cfg.output_dir)), meta)
+            rel = str(path.relative_to(self.cfg.output_dir))
+            self.db.upsert_clip_from_meta(rel, meta)
         except Exception:  # noqa: BLE001 - indexing must never break clipping
             log.exception("could not index clip %s", folder)
+            return
+        if self.on_clip_ready:
+            self.on_clip_ready(rel)
 
     async def _results_loop(self) -> None:
         while True:
