@@ -48,6 +48,7 @@ LOGIN_RE = {
     "kick": re.compile(r"^[a-z0-9_\-]{3,25}$"),
 }
 FILES = {"vertical": "vertical.mp4", "horizontal": "horizontal.mp4", "thumb": "thumb.jpg"}
+REJECT_GRACE = 8             # seconds to undo a reject before the clip is deleted everywhere
 
 
 class StreamerIn(BaseModel):
@@ -160,6 +161,8 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        for row in db.clips(status="rejected", limit=10000):     # rejects left by a restart
+            purge_clip(row["id"])
         added = db.sync_clips(clips_dir)
         if added:
             log.info("indexed %d existing clips", added)
@@ -334,7 +337,10 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
     def list_clips(status: str | None = None, channel: str | None = None, source: str | None = None,
                    limit: int = 200):
         db.sync_clips(clips_dir)
-        return [clip_out(r) for r in db.clips(status, channel, source, limit)]
+        rows = db.clips(status, channel, source, limit)
+        if status != "rejected":                       # rejected = on its way to deletion
+            rows = [r for r in rows if r["status"] != "rejected"]
+        return [clip_out(r) for r in rows]
 
     @app.get("/api/clips/{cid}")
     def get_clip(cid: int):
@@ -343,26 +349,56 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | No
             raise HTTPException(404, "no such clip")
         return clip_out(row)
 
+    def purge_clip(cid: int) -> None:
+        """Delete a clip everywhere: its folder on disk (videos, thumbnail, captions, meta) and
+        its database row. One line of chat stats goes to data/rejected.jsonl for tuning."""
+        row = db.clip(cid)
+        if not row:
+            return
+        folder = (clips_dir / row["folder"]).resolve()
+        try:
+            meta = json.loads((folder / "meta.json").read_text())
+        except (OSError, ValueError):
+            meta = {}
+        if row["status"] == "rejected":
+            with (cfg.data_dir / "rejected.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "rejected_at": time.time(), "channel": row["channel"], "source": row["source"],
+                    "moment": row["moment"], "ratio": row["ratio"], "seconds": row["seconds"],
+                    "score": meta.get("score"), "baseline": meta.get("baseline"),
+                    "top_messages": meta.get("top_messages", []), "reaction_counts": meta.get("reaction_counts", {}),
+                    "transcript": meta.get("transcript", ""), "source_url": meta.get("source_url", ""),
+                }, ensure_ascii=False) + "\n")
+        if clips_dir.resolve() in folder.parents and folder.exists():
+            shutil.rmtree(folder)
+        db.delete_clip(cid)
+        write_index(clips_dir)
+        log.info("deleted clip %s", row["folder"])
+
+    async def purge_after_grace(cid: int) -> None:
+        await asyncio.sleep(REJECT_GRACE)
+        row = db.clip(cid)
+        if row and row["status"] == "rejected":          # not undone
+            await asyncio.to_thread(purge_clip, cid)
+
     @app.patch("/api/clips/{cid}")
-    def edit_clip(cid: int, body: ClipPatch):
+    async def edit_clip(cid: int, body: ClipPatch):
         if not db.clip(cid):
             raise HTTPException(404, "no such clip")
         patch = body.model_dump(exclude_unset=True)
         if "status" in patch and patch["status"] not in CLIP_STATUSES:
             raise HTTPException(422, f"status must be one of {', '.join(CLIP_STATUSES)}")
-        return clip_out(db.update_clip(cid, patch))
+        row = db.update_clip(cid, patch)
+        if patch.get("status") == "rejected":
+            asyncio.create_task(purge_after_grace(cid))     # undo = set the status back within the grace
+        out = clip_out(row)
+        out["delete_in"] = REJECT_GRACE if patch.get("status") == "rejected" else None
+        return out
 
     @app.delete("/api/clips/{cid}", status_code=204)
-    def delete_clip(cid: int, files: bool = False):
-        row = db.clip(cid)
-        if not row:
-            return
-        if files:
-            folder = (clips_dir / row["folder"]).resolve()
-            if clips_dir.resolve() in folder.parents and folder.exists():
-                shutil.rmtree(folder)
-            write_index(clips_dir)
-        db.delete_clip(cid)
+    def delete_clip(cid: int):
+        """Delete now, everywhere (no grace)."""
+        purge_clip(cid)
 
     @app.get("/api/clips/{cid}/download/{kind}")
     def download(cid: int, kind: str):

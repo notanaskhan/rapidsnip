@@ -39,16 +39,19 @@ export function usePoll<T>(fetcher: () => Promise<T>, ms: number, deps: unknown[
   return { data, error, reload, setData };
 }
 
-/** A transient message (toast) that clears itself. */
+export type FlashAction = { label: string; onClick: () => void };
+
+/** A transient message (toast) that clears itself, optionally with one action (e.g. Undo). */
 export function useFlash(ms = 2500) {
-  const [msg, setMsg] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
+  const [msg, setMsg] = useState<{ text: string; kind: "ok" | "err"; action?: FlashAction } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const flash = useCallback((text: string, kind: "ok" | "err" = "ok") => {
-    setMsg({ text, kind });
+  const flash = useCallback((text: string, kind: "ok" | "err" = "ok", action?: FlashAction, forMs?: number) => {
+    setMsg({ text, kind, action });
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setMsg(null), kind === "err" ? ms * 2 : ms);
+    timer.current = setTimeout(() => setMsg(null), forMs ?? (kind === "err" ? ms * 2 : ms));
   }, [ms]);
-  return { msg, flash };
+  const clear = useCallback(() => { clearTimeout(timer.current); setMsg(null); }, []);
+  return { msg, flash, clear };
 }
 
 const subscribeHash = (cb: () => void) => {

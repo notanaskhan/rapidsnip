@@ -190,7 +190,8 @@ class DB:
 
     def clip_counts(self) -> dict:
         with self.conn() as c:
-            return {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM clips GROUP BY status")}
+            return {r["status"]: r["n"] for r in c.execute(
+                "SELECT status, COUNT(*) n FROM clips WHERE status != 'rejected' GROUP BY status")}
 
     def sync_clips(self, clips_dir: Path) -> int:
         """Index every clips/*/*/meta.json that isn't in the database yet."""

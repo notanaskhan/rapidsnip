@@ -189,9 +189,10 @@ export const api = {
     const params = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
     return call<Clip[]>(`/api/clips?${params}`);
   },
+  /** Setting status "rejected" deletes the clip everywhere after `delete_in` seconds unless undone. */
   updateClip: (id: number, c: Partial<Pick<Clip, "status" | "title" | "description">>) =>
-    call<Clip>(`/api/clips/${id}`, json("PATCH", c)),
-  deleteClip: (id: number, files = false) => call<void>(`/api/clips/${id}?files=${files}`, json("DELETE")),
+    call<Clip & { delete_in: number | null }>(`/api/clips/${id}`, json("PATCH", c)),
+  deleteClip: (id: number) => call<void>(`/api/clips/${id}`, json("DELETE")),
   downloadUrl: (id: number, kind: "vertical" | "horizontal" | "thumb") => `/api/clips/${id}/download/${kind}`,
 
   links: () => call<LinkJob[]>("/api/links"),
