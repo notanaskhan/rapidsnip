@@ -56,7 +56,7 @@ channels:
       facecam: [0, 432, 392, 220]
       gameplay: [400, 90, 1300, 990]  # skips facecam, on-screen chat, viewer counter, compass bar
 
-  - name: carryislive           # CarryMinati streams on YouTube; live YouTube recording isn't supported yet
+  - name: carryislive           # CarryMinati streams on YouTube (YouTube handle, live recording + chat)
     platform: youtube
     display_name: CarryMinati
     permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
