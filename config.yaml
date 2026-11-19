@@ -61,6 +61,6 @@ channels:
     display_name: CarryMinati
     permission: "yes, confirmed by owner 2026-11-18 (add DM link/screenshot)"
     credit_url: https://www.youtube.com/@CarryisLive
-    layout:
-      facecam: null
-      gameplay: null
+    layout:                     # from tools/calibrate.py --from a buffer segment (2026-11-19)
+      facecam: [14, 428, 384, 222]    # skips the CarryisLive banner above and name tag below
+      gameplay: [400, 0, 1300, 1080]
