@@ -154,7 +154,7 @@ def _jpeg(data: bytes, source: str) -> Response:
                     headers={"X-Frame-Source": source, "Cache-Control": "no-store"})
 
 
-def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
+def create_app(cfg: Config, db: DB, live: bool = True, links=None, key: str | None = None) -> FastAPI:
     sup = Supervisor(cfg, db=db)
     clips_dir = cfg.output_dir
 
@@ -178,6 +178,18 @@ def create_app(cfg: Config, db: DB, live: bool = True, links=None) -> FastAPI:
 
     app = FastAPI(title="Clipper", lifespan=lifespan)
     app.state.sup, app.state.db, app.state.cfg = sup, db, cfg
+    if key:
+        import hmac
+
+        @app.middleware("http")
+        async def require_key(request: Request, call_next):
+            # Reached through a public tunnel: only the hosted UI's server knows the key.
+            if request.url.path != "/api/health" and not hmac.compare_digest(
+                    request.headers.get("x-clipper-key", ""), key):
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": "missing or wrong key"}, status_code=401)
+            return await call_next(request)
+
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3210", "http://127.0.0.1:3210"],
                        allow_methods=["*"], allow_headers=["*"])
 

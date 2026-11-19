@@ -24,6 +24,8 @@ def main() -> None:
     serve.add_argument("--no-live", action="store_true", help="don't record; API, clips and link jobs only")
     serve.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to allow other devices on your Wi-Fi")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--remote", action="store_true",
+                       help="require the shared key in data/api_key (for the hosted UI via a tunnel)")
     args = p.parse_args()
 
     cfg = load_config(args.config)
@@ -85,7 +87,16 @@ def _serve(cfg, args, log) -> None:
     n = import_config_channels(db, cfg.channels)
     if n:
         log.info("imported %d streamers from config.yaml", n)
-    app = create_app(cfg, db, live=not args.no_live, links=LinkManager(cfg, db))
+    key = None
+    if args.remote:
+        import secrets
+        key_file = cfg.data_dir / "api_key"
+        if not key_file.exists():
+            key_file.write_text(secrets.token_urlsafe(32))
+            key_file.chmod(0o600)
+        key = key_file.read_text().strip()
+        log.info("remote mode: requests need the key in %s", key_file)
+    app = create_app(cfg, db, live=not args.no_live, links=LinkManager(cfg, db), key=key)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

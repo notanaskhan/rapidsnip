@@ -17,6 +17,7 @@ const NAV = [
 export default function Sidebar() {
   const path = usePathname();
   const { data: status, error } = usePoll(api.status, 5000);
+  if (path === "/login") return null;
   const live = status?.channels.filter((c) => c.live).length ?? 0;
   const fresh = status?.clips.new ?? 0;
 
@@ -52,6 +53,9 @@ export default function Sidebar() {
         ) : (
           <span>Connecting…</span>
         )}
+        <form action="/auth/logout" method="post">
+          <button type="submit" className={styles.signout}>Sign out</button>
+        </form>
       </div>
     </aside>
   );

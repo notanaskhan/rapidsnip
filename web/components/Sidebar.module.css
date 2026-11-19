@@ -25,6 +25,8 @@
 .badgeLive { background: var(--live-soft); color: var(--live); }
 .foot { margin-top: auto; padding: 10px 8px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--faint); }
 .up { color: var(--ok); font-weight: 600; }
+.signout { margin-top: 6px; padding: 0; border: 0; background: none; color: var(--faint); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+.signout:hover { color: var(--text); text-decoration: underline; }
 .idle { color: var(--warn); font-weight: 600; }
 .down { color: var(--live); font-weight: 600; }
 
